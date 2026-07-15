@@ -1,0 +1,372 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using AndonVoiceBroadcaster.Infrastructure;
+using AndonVoiceBroadcaster.Models;
+
+namespace AndonVoiceBroadcaster.Services
+{
+    public sealed class BroadcastCoordinator : IDisposable
+    {
+        private readonly AppSettings _settings;
+        private readonly MesCredentials _credentials;
+        private readonly MesApiClient _apiClient;
+        private readonly SpeechService _speechService;
+        private readonly SoundService _soundService;
+        private readonly FileLogger _logger;
+        private readonly object _syncRoot = new object();
+        private CancellationTokenSource _cancellationTokenSource;
+        private Task _runTask;
+        private volatile bool _paused;
+        private bool _workshopsResolved;
+
+        public BroadcastCoordinator(
+            AppSettings settings,
+            MesCredentials credentials,
+            MesApiClient apiClient,
+            SpeechService speechService,
+            SoundService soundService,
+            FileLogger logger)
+        {
+            _settings = settings;
+            _credentials = credentials;
+            _apiClient = apiClient;
+            _speechService = speechService;
+            _soundService = soundService;
+            _logger = logger;
+        }
+
+        public event Action<string> StatusChanged;
+        public event Action<VoiceBroadcastTask> CurrentTaskChanged;
+        public event Action<List<VoiceBroadcastTask>> TaskListChanged;
+
+        public bool IsPaused
+        {
+            get { return _paused; }
+        }
+
+        public void Start()
+        {
+            lock (_syncRoot)
+            {
+                if (_runTask != null && !_runTask.IsCompleted)
+                {
+                    _paused = false;
+                    RaiseStatus("运行中");
+                    return;
+                }
+                _paused = false;
+                _cancellationTokenSource = new CancellationTokenSource();
+                _runTask = Task.Run(() => RunLoopAsync(_cancellationTokenSource.Token));
+            }
+        }
+
+        public void Pause()
+        {
+            _paused = true;
+            _speechService.Cancel();
+            _soundService.Stop();
+            RaiseStatus("已暂停");
+            _logger.Info("播报已由用户暂停。");
+        }
+
+        public void Resume()
+        {
+            _paused = false;
+            RaiseStatus("运行中");
+            _logger.Info("播报已恢复。");
+        }
+
+        public async Task StopAsync()
+        {
+            Task task;
+            lock (_syncRoot)
+            {
+                if (_cancellationTokenSource != null)
+                {
+                    _cancellationTokenSource.Cancel();
+                }
+                task = _runTask;
+            }
+
+            _speechService.Cancel();
+            _soundService.Stop();
+            if (task != null)
+            {
+                try
+                {
+                    await task;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+            RaiseStatus("已停止");
+        }
+
+        public async Task TestSoundAsync(CancellationToken cancellationToken)
+        {
+            await _soundService.PlayAsync(cancellationToken);
+        }
+
+        public async Task TestSpeechAsync(CancellationToken cancellationToken)
+        {
+            await _speechService.SpeakAsync("这是一条安灯语音播报测试。", _settings.TtsRate, _settings.TtsVolume, cancellationToken);
+        }
+
+        private async Task RunLoopAsync(CancellationToken cancellationToken)
+        {
+            RaiseStatus("正在连接 MES");
+            _logger.Info("播报协调器已启动，终端=" + _settings.TerminalCode);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                int retryDelaySeconds = 0;
+                try
+                {
+                    if (_paused)
+                    {
+                        await Task.Delay(500, cancellationToken);
+                        continue;
+                    }
+
+                    await EnsureLoggedInAsync(cancellationToken);
+                    List<VoiceBroadcastTask> tasks = await _apiClient.GetPendingTasksAsync(_settings.WorkshopIdList, cancellationToken);
+                    tasks = tasks.Where(x => x != null && x.IsPending)
+                        .OrderBy(x => string.IsNullOrWhiteSpace(x.CreateTime) ? "9999-12-31 23:59:59" : x.CreateTime)
+                        .ThenBy(x => x.Id)
+                        .ToList();
+                    RaiseTaskList(tasks);
+                    _logger.Info("查询到待播报任务 " + tasks.Count + " 条。");
+
+                    foreach (VoiceBroadcastTask task in tasks)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (_paused)
+                        {
+                            break;
+                        }
+                        await ProcessTaskAsync(task, cancellationToken);
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(_settings.PollIntervalSeconds), cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (MesUnauthorizedException exception)
+                {
+                    _apiClient.ClearToken();
+                    _workshopsResolved = false;
+                    RaiseStatus("MES 登录已失效，正在重新登录");
+                    _logger.Warn(exception.Message);
+                    retryDelaySeconds = _settings.NetworkRetrySeconds;
+                }
+                catch (Exception exception)
+                {
+                    RaiseStatus("MES 连接异常，等待重试");
+                    _logger.Error("播报循环发生异常。", exception);
+                    retryDelaySeconds = _settings.NetworkRetrySeconds;
+                }
+
+                if (retryDelaySeconds > 0)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(retryDelaySeconds), cancellationToken);
+                }
+            }
+            _logger.Info("播报协调器已停止。");
+        }
+
+        private async Task ProcessTaskAsync(VoiceBroadcastTask task, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(task.Content))
+            {
+                _logger.Warn("任务 " + task.Id + " 的播报内容为空，保留待播报状态。\r\n");
+                return;
+            }
+
+            while (task.IsPending && !_paused)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int expectedBroadcastedNum = task.BroadcastedNum;
+                RaiseCurrentTask(task);
+                RaiseStatus("正在播报任务 " + task.Id);
+                _logger.Info("开始播报任务=" + task.Id + "，次数=" + (expectedBroadcastedNum + 1) + "/" + task.VoiceNum);
+
+                try
+                {
+                    if (_soundService.Exists)
+                    {
+                        await _soundService.PlayAsync(cancellationToken);
+                    }
+                    else
+                    {
+                        _logger.Warn("提示音文件不存在，跳过提示音：" + Path.GetFileName("AlarmMusic.wav"));
+                    }
+
+                    await _speechService.SpeakAsync(task.Content, _settings.TtsRate, _settings.TtsVolume, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.Info("任务 " + task.Id + " 的当前播报已取消，未确认次数。");
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    _logger.Error("任务 " + task.Id + " 播放失败，未确认次数。", exception);
+                    return;
+                }
+
+                bool confirmed = await ConfirmPlayedWithRecoveryAsync(task.Id, expectedBroadcastedNum, cancellationToken);
+                if (!confirmed)
+                {
+                    _logger.Warn("任务 " + task.Id + " 的确认被拒绝或状态已变化，将重新查询任务。\r\n");
+                    return;
+                }
+
+                task.BroadcastedNum = expectedBroadcastedNum + 1;
+                task.State = task.BroadcastedNum >= task.VoiceNum ? "1" : "0";
+                _logger.Info("任务 " + task.Id + " 第 " + task.BroadcastedNum + " 次播报确认成功。");
+                RaiseCurrentTask(task);
+
+                if (task.IsPending && _settings.BroadcastIntervalSeconds > 0)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(_settings.BroadcastIntervalSeconds), cancellationToken);
+                }
+            }
+        }
+
+        private async Task<bool> ConfirmPlayedWithRecoveryAsync(long taskId, int expectedBroadcastedNum, CancellationToken cancellationToken)
+        {
+            bool reloginRequired = false;
+            try
+            {
+                return await _apiClient.ConfirmPlayedAsync(taskId, expectedBroadcastedNum, cancellationToken);
+            }
+            catch (MesUnauthorizedException)
+            {
+                _apiClient.ClearToken();
+                _workshopsResolved = false;
+                reloginRequired = true;
+            }
+            catch (MesApiException exception)
+            {
+                _logger.Warn("确认任务 " + taskId + " 时发生异常，先查询任务实际状态：" + exception.Message);
+            }
+
+            if (reloginRequired)
+            {
+                await EnsureLoggedInAsync(cancellationToken);
+            }
+
+            VoiceBroadcastTask actual = await _apiClient.GetTaskAsync(taskId, cancellationToken);
+            if (actual == null)
+            {
+                return false;
+            }
+            if (actual.BroadcastedNum > expectedBroadcastedNum)
+            {
+                return true;
+            }
+            if (!actual.IsPending || actual.BroadcastedNum != expectedBroadcastedNum)
+            {
+                return false;
+            }
+            return await _apiClient.ConfirmPlayedAsync(taskId, expectedBroadcastedNum, cancellationToken);
+        }
+
+        private async Task EnsureLoggedInAsync(CancellationToken cancellationToken)
+        {
+            if (_apiClient.HasToken && (_workshopsResolved || _settings.WorkshopNames == null || _settings.WorkshopNames.Count == 0))
+            {
+                return;
+            }
+            if (!_credentials.IsComplete())
+            {
+                throw new MesApiException("未配置 MES 登录账号或密码。");
+            }
+            if (!_apiClient.HasToken)
+            {
+                await _apiClient.LoginAsync(_credentials, cancellationToken);
+            }
+            await ResolveWorkshopsAsync(cancellationToken);
+            RaiseStatus("运行中");
+            _logger.Info("MES 登录成功。");
+        }
+
+        private async Task ResolveWorkshopsAsync(CancellationToken cancellationToken)
+        {
+            if (_settings.WorkshopNames == null || _settings.WorkshopNames.Count == 0)
+            {
+                _workshopsResolved = true;
+                return;
+            }
+
+            List<WorkshopOption> options = await _apiClient.GetWorkshopsAsync(cancellationToken);
+            var byName = options
+                .Where(x => x != null && x.WorkshopId >= 0 && !string.IsNullOrWhiteSpace(x.WorkshopName))
+                .GroupBy(x => x.WorkshopName.Trim(), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(x => x.Key, x => x.First().WorkshopId, StringComparer.OrdinalIgnoreCase);
+            var matched = new List<long>();
+            var missing = new List<string>();
+            foreach (string name in _settings.WorkshopNames)
+            {
+                long workshopId;
+                if (byName.TryGetValue(name.Trim(), out workshopId))
+                {
+                    matched.Add(workshopId);
+                }
+                else
+                {
+                    missing.Add(name);
+                }
+            }
+            if (missing.Count > 0)
+            {
+                throw new MesApiException("未匹配到车间：" + string.Join("、", missing) + "。请确认名称、启用状态及账号权限。");
+            }
+            _settings.WorkshopIdList = matched.Distinct().ToList();
+            _workshopsResolved = true;
+            _logger.Info("车间名称已解析为 ID：" + string.Join(",", _settings.WorkshopIdList));
+        }
+
+        private void RaiseStatus(string value)
+        {
+            var handler = StatusChanged;
+            if (handler != null)
+            {
+                handler(value);
+            }
+        }
+
+        private void RaiseCurrentTask(VoiceBroadcastTask task)
+        {
+            var handler = CurrentTaskChanged;
+            if (handler != null)
+            {
+                handler(task);
+            }
+        }
+
+        private void RaiseTaskList(List<VoiceBroadcastTask> tasks)
+        {
+            var handler = TaskListChanged;
+            if (handler != null)
+            {
+                handler(tasks);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_cancellationTokenSource != null)
+            {
+                _cancellationTokenSource.Cancel();
+                _cancellationTokenSource.Dispose();
+            }
+        }
+    }
+}
