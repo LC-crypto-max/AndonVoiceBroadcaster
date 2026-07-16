@@ -45,6 +45,7 @@ namespace AndonVoiceBroadcaster.Models
 
         public void Normalize()
         {
+            // 清理配置，并将数值限制在程序支持的范围内。
             MesBaseUrl = (MesBaseUrl ?? string.Empty).Trim().TrimEnd('/');
             LoginEndpoint = string.IsNullOrWhiteSpace(LoginEndpoint) ? "/loginWithNoCode" : (LoginEndpoint.Trim().StartsWith("/") ? LoginEndpoint.Trim() : "/" + LoginEndpoint.Trim());
             TerminalCode = string.IsNullOrWhiteSpace(TerminalCode) ? Environment.MachineName : TerminalCode.Trim();

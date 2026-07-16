@@ -35,6 +35,7 @@ namespace AndonVoiceBroadcaster.Forms
         private bool _allowExit;
         private bool _shutdownStarted;
         private bool _shutdownCompleted;
+        private int _exitWatchdogStarted;
 
         public MainForm()
         {
@@ -68,7 +69,7 @@ namespace AndonVoiceBroadcaster.Forms
             var testSpeechButton = new Button { Text = "测试中文语音", Width = 115 };
             testSpeechButton.Click += async (sender, args) => await RunTestAsync(true);
             var settingsButton = new Button { Text = "系统设置", Width = 100 };
-            settingsButton.Click += (sender, args) => OpenSettings();
+            settingsButton.Click += async (sender, args) => await OpenSettingsAsync();
             buttonPanel.Controls.Add(_pauseButton);
             buttonPanel.Controls.Add(testSoundButton);
             buttonPanel.Controls.Add(testSpeechButton);
@@ -95,7 +96,7 @@ namespace AndonVoiceBroadcaster.Forms
             menu.Items.Add("开始/暂停播报", null, (sender, args) => TogglePause());
             menu.Items.Add("测试提示音", null, async (sender, args) => await RunTestAsync(false));
             menu.Items.Add("测试中文语音", null, async (sender, args) => await RunTestAsync(true));
-            menu.Items.Add("系统设置", null, (sender, args) => OpenSettings());
+            menu.Items.Add("系统设置", null, async (sender, args) => await OpenSettingsAsync());
             menu.Items.Add("打开日志目录", null, (sender, args) => OpenLogDirectory());
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("退出程序", null, (sender, args) => ExitProgram());
@@ -113,6 +114,7 @@ namespace AndonVoiceBroadcaster.Forms
 
         private void MainFormOnLoad(object sender, EventArgs eventArgs)
         {
+            // 普通设置与 DPAPI 加密的 MES 凭据分开加载。
             _settingsService = new SettingsService(_applicationDirectory);
             _settings = _settingsService.LoadSettings();
             _credentials = _settingsService.LoadCredentials();
@@ -130,6 +132,7 @@ namespace AndonVoiceBroadcaster.Forms
 
         private void StartCoordinator()
         {
+            // 设置变化后释放旧服务，再按新配置重新初始化。
             StopCoordinator();
             _settings.Normalize();
             new StartupService().Configure(_settings.StartWithWindows, Application.ExecutablePath);
@@ -147,7 +150,7 @@ namespace AndonVoiceBroadcaster.Forms
                 string voiceName = _speechService.EnsureChineseVoice(_settings.PreferredVoiceName);
                 _logger.Info("中文语音初始化成功：" + voiceName);
 
-                // 本地语音验证不依赖 MES；只有服务地址和凭据齐全时才启动任务轮询。
+                // 本地声音测试不依赖 MES；配置完整后才启动任务轮询。
                 if (!_settings.IsComplete() || !_credentials.IsComplete())
                 {
                     _pauseButton.Enabled = false;
@@ -174,33 +177,40 @@ namespace AndonVoiceBroadcaster.Forms
 
         private void StopCoordinator()
         {
-            if (_coordinator != null)
+            BroadcastCoordinator coordinator = _coordinator;
+            MesApiClient apiClient = _apiClient;
+            SpeechService speechService = _speechService;
+            SoundService soundService = _soundService;
+            _coordinator = null;
+            _apiClient = null;
+            _speechService = null;
+            _soundService = null;
+
+            if (coordinator != null)
             {
                 try
                 {
-                    _coordinator.StopAsync().GetAwaiter().GetResult();
+                    Task stopTask = coordinator.StopAsync();
+                    Task completed = Task.WhenAny(stopTask, Task.Delay(TimeSpan.FromSeconds(5))).GetAwaiter().GetResult();
+                    if (completed == stopTask)
+                    {
+                        stopTask.GetAwaiter().GetResult();
+                    }
+                    else
+                    {
+                        _logger.Warn("重载设置时协调器停止超时，将继续释放旧资源。");
+                    }
                 }
                 catch (Exception exception)
                 {
                     _logger.Error("停止播报协调器失败。", exception);
                 }
-                _coordinator.Dispose();
-                _coordinator = null;
             }
-            if (_apiClient != null)
+
+            Task disposeTask = Task.Run(() => DisposeServiceSet(coordinator, apiClient, speechService, soundService));
+            if (!disposeTask.Wait(TimeSpan.FromSeconds(2)))
             {
-                _apiClient.Dispose();
-                _apiClient = null;
-            }
-            if (_speechService != null)
-            {
-                _speechService.Dispose();
-                _speechService = null;
-            }
-            if (_soundService != null)
-            {
-                _soundService.Dispose();
-                _soundService = null;
+                _logger.Warn("旧音频资源在 2 秒内未释放完成，已从界面线程脱离处理。");
             }
         }
 
@@ -261,15 +271,33 @@ namespace AndonVoiceBroadcaster.Forms
             }
         }
 
-        private void OpenSettings()
+        private async Task OpenSettingsAsync()
         {
             using (var form = new SettingsForm(_settingsService, _settings, _credentials))
             {
                 if (form.ShowDialog(this) == DialogResult.OK)
                 {
-                    _settings = _settingsService.LoadSettings();
-                    _credentials = _settingsService.LoadCredentials();
-                    StartCoordinator();
+                    Enabled = false;
+                    SetStatus("正在应用新设置");
+                    try
+                    {
+                        // 停止旧协调器可能涉及网络和系统音频，不能阻塞 WinForms 消息循环。
+                        await Task.Run(() => StopCoordinator());
+                        if (_shutdownStarted)
+                        {
+                            return;
+                        }
+                        _settings = _settingsService.LoadSettings();
+                        _credentials = _settingsService.LoadCredentials();
+                        StartCoordinator();
+                    }
+                    finally
+                    {
+                        if (!_shutdownStarted && !IsDisposed)
+                        {
+                            Enabled = true;
+                        }
+                    }
                 }
             }
         }
@@ -334,6 +362,7 @@ namespace AndonVoiceBroadcaster.Forms
             }
             if (InvokeRequired)
             {
+                // 后台事件必须切换到 WinForms UI 线程更新控件。
                 BeginInvoke(action);
             }
             else
@@ -344,6 +373,7 @@ namespace AndonVoiceBroadcaster.Forms
 
         private async void MainFormOnClosing(object sender, FormClosingEventArgs eventArgs)
         {
+            // 普通关闭只隐藏到托盘；明确退出时才停止播报。
             if (!_allowExit && eventArgs.CloseReason == CloseReason.UserClosing)
             {
                 eventArgs.Cancel = true;
@@ -361,6 +391,7 @@ namespace AndonVoiceBroadcaster.Forms
                 return;
             }
             _shutdownStarted = true;
+            StartExitWatchdog();
             Enabled = false;
             SetStatus("正在安全退出");
             if (_notifyIcon != null)
@@ -368,67 +399,134 @@ namespace AndonVoiceBroadcaster.Forms
                 _notifyIcon.Visible = false;
             }
 
-            await StopCoordinatorForExitAsync();
-            if (_notifyIcon != null)
+            try
             {
-                _notifyIcon.Dispose();
-                _notifyIcon = null;
+                await StopCoordinatorForExitAsync();
             }
-            if (_logger != null)
+            catch (Exception exception)
             {
-                _logger.Info("程序已退出。");
+                if (_logger != null)
+                {
+                    _logger.Error("安全退出过程中发生异常，将继续关闭程序。", exception);
+                }
             }
-            _shutdownCompleted = true;
-            Close();
-            Application.ExitThread();
+            finally
+            {
+                if (_notifyIcon != null)
+                {
+                    _notifyIcon.Dispose();
+                    _notifyIcon = null;
+                }
+                if (_logger != null)
+                {
+                    _logger.Info("程序已退出。");
+                }
+                _shutdownCompleted = true;
+                Close();
+                Application.ExitThread();
+            }
         }
 
         private async Task StopCoordinatorForExitAsync()
         {
-            if (_coordinator == null)
-            {
-                StopCoordinator();
-                return;
-            }
+            BroadcastCoordinator coordinator = _coordinator;
+            MesApiClient apiClient = _apiClient;
+            SpeechService speechService = _speechService;
+            SoundService soundService = _soundService;
+            _coordinator = null;
+            _apiClient = null;
+            _speechService = null;
+            _soundService = null;
 
-            Task stopTask = _coordinator.StopAsync();
-            Task completed = await Task.WhenAny(stopTask, Task.Delay(TimeSpan.FromSeconds(5)));
-            if (completed != stopTask && _logger != null)
+            if (coordinator != null)
             {
-                _logger.Warn("播报协调器在 5 秒内未完全停止，将继续释放资源并退出程序。");
-            }
-            else
-            {
-                try
+                Task stopTask = coordinator.StopAsync();
+                // 限制退出等待时间，避免后台服务异常时窗口无法关闭。
+                Task completed = await Task.WhenAny(stopTask, Task.Delay(TimeSpan.FromSeconds(5)));
+                if (completed != stopTask && _logger != null)
                 {
-                    await stopTask;
+                    _logger.Warn("播报协调器在 5 秒内未完全停止，将继续释放资源并退出程序。");
                 }
-                catch (Exception exception)
+                else
                 {
-                    if (_logger != null)
+                    try
                     {
-                        _logger.Error("停止播报协调器失败。", exception);
+                        await stopTask;
+                    }
+                    catch (Exception exception)
+                    {
+                        if (_logger != null)
+                        {
+                            _logger.Error("停止播报协调器失败。", exception);
+                        }
                     }
                 }
             }
 
-            _coordinator.Dispose();
-            _coordinator = null;
-            if (_apiClient != null)
+            Task disposeTask = Task.Run(() => DisposeServiceSet(coordinator, apiClient, speechService, soundService));
+            if (await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromSeconds(2))) != disposeTask && _logger != null)
             {
-                _apiClient.Dispose();
-                _apiClient = null;
+                _logger.Warn("音频资源释放超时，将由退出看门狗保证进程结束。");
             }
-            if (_speechService != null)
+        }
+
+        private void DisposeServiceSet(
+            BroadcastCoordinator coordinator,
+            MesApiClient apiClient,
+            SpeechService speechService,
+            SoundService soundService)
+        {
+            TryDispose(coordinator, "播报协调器");
+            TryDispose(apiClient, "MES 客户端");
+            TryDispose(speechService, "中文语音服务");
+            TryDispose(soundService, "提示音服务");
+        }
+
+        private void TryDispose(IDisposable service, string name)
+        {
+            if (service == null)
             {
-                _speechService.Dispose();
-                _speechService = null;
+                return;
             }
-            if (_soundService != null)
+
+            try
             {
-                _soundService.Dispose();
-                _soundService = null;
+                service.Dispose();
             }
+            catch (Exception exception)
+            {
+                if (_logger != null)
+                {
+                    _logger.Error("释放" + name + "失败。", exception);
+                }
+            }
+        }
+
+        private void StartExitWatchdog()
+        {
+            if (Interlocked.Exchange(ref _exitWatchdogStarted, 1) != 0)
+            {
+                return;
+            }
+
+            // 用户确认退出后，即使系统音频组件永久阻塞，也保证进程最终结束。
+            var watchdog = new Thread(() =>
+            {
+                Thread.Sleep(TimeSpan.FromSeconds(10));
+                try
+                {
+                    if (_logger != null)
+                    {
+                        _logger.Warn("正常退出超过 10 秒，执行进程级兜底退出。");
+                    }
+                }
+                catch
+                {
+                }
+                Environment.Exit(0);
+            });
+            watchdog.IsBackground = true;
+            watchdog.Start();
         }
 
         private void HideToTray()
@@ -459,6 +557,7 @@ namespace AndonVoiceBroadcaster.Forms
             {
                 return;
             }
+            StartExitWatchdog();
             _allowExit = true;
             Close();
         }

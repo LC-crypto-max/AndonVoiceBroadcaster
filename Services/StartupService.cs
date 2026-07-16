@@ -18,6 +18,7 @@ namespace AndonVoiceBroadcaster.Services
 
                 if (enabled)
                 {
+                    // 开机启动时附带最小化参数，使程序直接进入托盘。
                     key.SetValue(ValueName, "\"" + executablePath + "\" --minimized");
                 }
                 else

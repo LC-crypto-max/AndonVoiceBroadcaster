@@ -11,6 +11,7 @@ namespace AndonVoiceBroadcaster.Infrastructure
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             byte[] source = Encoding.UTF8.GetBytes(plaintext ?? string.Empty);
+            // 凭据仅允许当前 Windows 用户解密。
             byte[] encrypted = ProtectedData.Protect(source, null, DataProtectionScope.CurrentUser);
             File.WriteAllText(path, Convert.ToBase64String(encrypted), Encoding.UTF8);
         }

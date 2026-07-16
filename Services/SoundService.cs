@@ -22,23 +22,37 @@ namespace AndonVoiceBroadcaster.Services
             get { return File.Exists(_soundPath); }
         }
 
-        public Task PlayAsync(CancellationToken cancellationToken)
+        public Task<bool> PlayAsync(CancellationToken cancellationToken)
         {
             if (!Exists)
             {
                 throw new FileNotFoundException("未找到提示音文件。", _soundPath);
             }
+            // 在线程池中同步播放，使调用方可以等待 WAV 播放完成。
             return Task.Run(() =>
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return false;
+                }
                 _player.PlaySync();
-                cancellationToken.ThrowIfCancellationRequested();
-            }, cancellationToken);
+                return !cancellationToken.IsCancellationRequested;
+            });
         }
 
         public void Stop()
         {
-            _player.Stop();
+            // SoundPlayer 也属于系统音频组件，停止操作不能阻塞 UI 或退出线程。
+            ThreadPool.QueueUserWorkItem(state =>
+            {
+                try
+                {
+                    ((SoundPlayer)state).Stop();
+                }
+                catch (Exception)
+                {
+                }
+            }, _player);
         }
 
         public void Dispose()

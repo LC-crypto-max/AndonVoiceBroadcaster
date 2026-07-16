@@ -92,6 +92,7 @@ namespace AndonVoiceBroadcaster.Services
         public async Task<bool> ConfirmPlayedAsync(long id, int expectedBroadcastedNum, int voiceNum, CancellationToken cancellationToken)
         {
             int nextBroadcastedNum = expectedBroadcastedNum + 1;
+            // 达到目标次数时完成任务，否则只累计本次播报。
             bool completed = nextBroadcastedNum >= voiceNum;
             var request = new Dictionary<string, object>
             {
@@ -131,6 +132,7 @@ namespace AndonVoiceBroadcaster.Services
 
         private async Task<T> SendAsync<T>(HttpMethod method, string relativePath, object body, bool requiresToken, CancellationToken cancellationToken)
         {
+            // 统一处理 MES 请求的 Token、HTTP 错误和 JSON 反序列化。
             if (string.IsNullOrWhiteSpace(_baseUrl))
             {
                 throw new MesApiException("MES 服务地址未配置。");

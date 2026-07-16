@@ -86,15 +86,27 @@ namespace AndonVoiceBroadcaster.Services
         public async Task StopAsync()
         {
             Task task;
+            CancellationTokenSource cancellation;
             lock (_syncRoot)
             {
-                if (_cancellationTokenSource != null)
-                {
-                    _cancellationTokenSource.Cancel();
-                }
+                cancellation = _cancellationTokenSource;
                 task = _runTask;
             }
 
+            // Cancel 会同步执行所有回调，放到线程池可避免某个系统回调拖住 UI/退出线程。
+            if (cancellation != null)
+            {
+                ThreadPool.QueueUserWorkItem(state =>
+                {
+                    try
+                    {
+                        ((CancellationTokenSource)state).Cancel();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                }, cancellation);
+            }
             _speechService.Cancel();
             _soundService.Stop();
             if (task != null)
@@ -124,6 +136,7 @@ namespace AndonVoiceBroadcaster.Services
         {
             RaiseStatus("正在连接 MES");
             _logger.Info("播报协调器已启动，终端=" + _settings.TerminalCode);
+            // 持续轮询 MES，并按创建时间依次处理待播报任务。
             while (!cancellationToken.IsCancellationRequested)
             {
                 int retryDelaySeconds = 0;
@@ -138,6 +151,7 @@ namespace AndonVoiceBroadcaster.Services
                     await EnsureLoggedInAsync(cancellationToken);
                     List<VoiceBroadcastTask> tasks = await _apiClient.GetPendingTasksAsync(_resolvedWorkshopIds, cancellationToken);
                     _consecutiveFailureCount = 0;
+                    // 时间格式固定为 yyyy-MM-dd HH:mm:ss，可按字符串实现 FIFO。
                     tasks = tasks.Where(x => x != null && x.IsPending)
                         .OrderBy(x => string.IsNullOrWhiteSpace(x.CreateTime) ? "9999-12-31 23:59:59" : x.CreateTime)
                         .ThenBy(x => x.Id)
@@ -147,8 +161,7 @@ namespace AndonVoiceBroadcaster.Services
 
                     foreach (VoiceBroadcastTask task in tasks)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (_paused)
+                        if (cancellationToken.IsCancellationRequested || _paused)
                         {
                             break;
                         }
@@ -188,6 +201,7 @@ namespace AndonVoiceBroadcaster.Services
 
             if (_consecutiveFailureCount >= maximum)
             {
+                // 达到失败上限后等待人工恢复，避免持续请求异常服务。
                 _paused = true;
                 RaiseStatus("连续失败已达上限，已暂停；请检查后点击继续播报");
                 _logger.Warn("已达到最大重试次数，停止自动请求 MES。修复配置或服务后，请点击“继续播报”。");
@@ -208,7 +222,10 @@ namespace AndonVoiceBroadcaster.Services
 
             while (task.IsPending && !_paused)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
                 int expectedBroadcastedNum = task.BroadcastedNum;
                 RaiseCurrentTask(task);
                 RaiseStatus("正在播报任务 " + task.Id);
@@ -216,16 +233,27 @@ namespace AndonVoiceBroadcaster.Services
 
                 try
                 {
+                    // 提示音和语音都完成后，才向 MES 确认本次次数。
                     if (_soundService.Exists)
                     {
-                        await _soundService.PlayAsync(cancellationToken);
+                        bool soundCompleted = await _soundService.PlayAsync(cancellationToken);
+                        if (!soundCompleted || _paused || cancellationToken.IsCancellationRequested)
+                        {
+                            _logger.Info("任务 " + task.Id + " 在提示音阶段被取消，未确认次数。");
+                            return;
+                        }
                     }
                     else
                     {
                         _logger.Warn("提示音文件不存在，跳过提示音：" + Path.GetFileName("AlarmMusic.wav"));
                     }
 
-                    await _speechService.SpeakAsync(task.Content, _settings.TtsRate, _settings.TtsVolume, cancellationToken);
+                    bool speechCompleted = await _speechService.SpeakAsync(task.Content, _settings.TtsRate, _settings.TtsVolume, cancellationToken);
+                    if (!speechCompleted || _paused || cancellationToken.IsCancellationRequested)
+                    {
+                        _logger.Info("任务 " + task.Id + " 在语音阶段被取消，未确认次数。");
+                        return;
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -259,6 +287,7 @@ namespace AndonVoiceBroadcaster.Services
 
         private async Task<bool> ConfirmPlayedWithRecoveryAsync(long taskId, int expectedBroadcastedNum, int voiceNum, CancellationToken cancellationToken)
         {
+            // 确认结果不明确时查询实际状态，避免直接重复播放。
             bool reloginRequired = false;
             try
             {
@@ -287,6 +316,7 @@ namespace AndonVoiceBroadcaster.Services
             }
             if (actual.BroadcastedNum > expectedBroadcastedNum)
             {
+                // 后端次数已增加，说明前一次确认实际上已经成功。
                 return true;
             }
             if (!actual.IsPending || actual.BroadcastedNum != expectedBroadcastedNum)

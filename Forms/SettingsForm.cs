@@ -134,6 +134,7 @@ namespace AndonVoiceBroadcaster.Forms
                 .ToList();
             var workshopIds = new List<long>();
             var workshopNames = new List<string>();
+            // 数字按车间 ID 保存，其他内容按车间名称保存。
             foreach (string value in workshopValues)
             {
                 long workshopId;

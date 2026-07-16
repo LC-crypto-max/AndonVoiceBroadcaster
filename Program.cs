@@ -9,6 +9,7 @@ namespace AndonVoiceBroadcaster
         [STAThread]
         private static void Main()
         {
+            // 使用全局互斥量，防止程序重复启动。
             using (var instance = new SingleInstanceGuard("AndonVoiceBroadcaster"))
             {
                 if (!instance.IsFirstInstance)
@@ -19,6 +20,7 @@ namespace AndonVoiceBroadcaster
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                // 初始化 WinForms 并进入主界面消息循环。
                 Application.Run(new Forms.MainForm());
             }
         }

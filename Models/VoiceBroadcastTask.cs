@@ -15,12 +15,12 @@ namespace AndonVoiceBroadcaster.Models
         public string LineName { get; set; }
         public long? WorkstationId { get; set; }
         public string WorkstationName { get; set; }
-        // 后端按 yyyy-MM-dd HH:mm:ss 输出，使用字符串避免 .NET Framework JavaScriptSerializer
-        // 对非 ISO 日期格式反序列化失败；该格式可直接用于一期 FIFO 字典序排序。
+        // 后端返回固定格式时间字符串，可直接用于 FIFO 排序。
         public string CreateTime { get; set; }
 
         public bool IsPending
         {
+            // 状态未完成且实际次数不足时，任务仍需播报。
             get { return State == "0" && BroadcastedNum < VoiceNum; }
         }
     }

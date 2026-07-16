@@ -58,6 +58,7 @@ namespace AndonVoiceBroadcaster.Infrastructure
 
         private void RemoveExpiredFiles()
         {
+            // 启动时清理超过保留期限的历史日志。
             DateTime deadline = DateTime.Today.AddDays(-_retentionDays);
             foreach (string path in Directory.GetFiles(_logDirectory, "app-*.log"))
             {
