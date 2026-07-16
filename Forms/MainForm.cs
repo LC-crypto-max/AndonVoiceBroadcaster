@@ -33,6 +33,8 @@ namespace AndonVoiceBroadcaster.Forms
         private ListView _taskList;
         private TextBox _logTextBox;
         private bool _allowExit;
+        private bool _shutdownStarted;
+        private bool _shutdownCompleted;
 
         public MainForm()
         {
@@ -340,7 +342,7 @@ namespace AndonVoiceBroadcaster.Forms
             }
         }
 
-        private void MainFormOnClosing(object sender, FormClosingEventArgs eventArgs)
+        private async void MainFormOnClosing(object sender, FormClosingEventArgs eventArgs)
         {
             if (!_allowExit && eventArgs.CloseReason == CloseReason.UserClosing)
             {
@@ -348,15 +350,84 @@ namespace AndonVoiceBroadcaster.Forms
                 HideToTray();
                 return;
             }
-            StopCoordinator();
+
+            if (_shutdownCompleted)
+            {
+                return;
+            }
+            eventArgs.Cancel = true;
+            if (_shutdownStarted)
+            {
+                return;
+            }
+            _shutdownStarted = true;
+            Enabled = false;
+            SetStatus("正在安全退出");
             if (_notifyIcon != null)
             {
                 _notifyIcon.Visible = false;
+            }
+
+            await StopCoordinatorForExitAsync();
+            if (_notifyIcon != null)
+            {
                 _notifyIcon.Dispose();
+                _notifyIcon = null;
             }
             if (_logger != null)
             {
                 _logger.Info("程序已退出。");
+            }
+            _shutdownCompleted = true;
+            Close();
+            Application.ExitThread();
+        }
+
+        private async Task StopCoordinatorForExitAsync()
+        {
+            if (_coordinator == null)
+            {
+                StopCoordinator();
+                return;
+            }
+
+            Task stopTask = _coordinator.StopAsync();
+            Task completed = await Task.WhenAny(stopTask, Task.Delay(TimeSpan.FromSeconds(5)));
+            if (completed != stopTask && _logger != null)
+            {
+                _logger.Warn("播报协调器在 5 秒内未完全停止，将继续释放资源并退出程序。");
+            }
+            else
+            {
+                try
+                {
+                    await stopTask;
+                }
+                catch (Exception exception)
+                {
+                    if (_logger != null)
+                    {
+                        _logger.Error("停止播报协调器失败。", exception);
+                    }
+                }
+            }
+
+            _coordinator.Dispose();
+            _coordinator = null;
+            if (_apiClient != null)
+            {
+                _apiClient.Dispose();
+                _apiClient = null;
+            }
+            if (_speechService != null)
+            {
+                _speechService.Dispose();
+                _speechService = null;
+            }
+            if (_soundService != null)
+            {
+                _soundService.Dispose();
+                _soundService = null;
             }
         }
 

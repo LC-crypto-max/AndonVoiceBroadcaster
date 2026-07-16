@@ -1,6 +1,6 @@
 # AndonVoiceBroadcaster
 
-这是 MES 安灯语音播报的 WinForms 客户端，目标框架为 .NET Framework 4.8。客户端适合车间固定电脑常驻运行：从现有 `sys_voice_broadcast` 查询任务，播放提示音和 Windows 中文语音，并通过原子确认接口更新播报次数。
+这是 MES 安灯语音播报的 WinForms 客户端，目标框架为 .NET Framework 4.8。客户端适合车间固定电脑常驻运行：从现有 `sys_voice_broadcast` 查询任务，播放提示音和 Windows 中文语音，并通过现有 MES 接口更新播报次数和完成状态。
 
 ## 第一天本地语音验证
 
@@ -12,7 +12,7 @@
 
 ## MES 联调配置
 
-需要联调时，在“系统设置”中填写 MES 地址和账号密码。车间名称是可选系统设置：填写后，程序调用 `/mes/md/workshop/listAll`，将中文名称精确匹配为内部车间 ID 并限定查询范围；留空时不附加车间限制。旧版 `WorkshopIdList` 仍作为兼容回退。
+需要联调时，在“系统设置”中填写 MES 地址和账号密码。“车间 ID 或名称”是可选设置，支持逗号分隔和混合填写，例如 `211,装配车间`：数字直接作为车间 ID，文字通过 `/mes/md/workshop/listAll` 精确匹配为内部车间 ID；留空时自动加载全部车间及未绑定产线的公共任务。
 
 默认登录地址为 `/loginWithNoCode`，可在 `config/appsettings.json` 的 `LoginEndpoint` 修改为 `/login`。无验证码登录只建议用于受控的本地测试，并应使用最小权限的专用账号；不要在源码或文档中保存管理员密码。
 
@@ -22,7 +22,7 @@ MES 登录或接口请求连续失败达到 `MaxRequestRetryCount`（默认 3 �
 
 ## 构建与运行
 
-使用 Visual Studio 2022 打开 `AndonVoiceBroadcaster.csproj`，选择 .NET Framework 4.8、Debug/Release 和 Any CPU 构建；也可执行 `dotnet msbuild AndonVoiceBroadcaster.csproj -t:Rebuild -p:Configuration=Debug`。启动后关闭主窗口会最小化到托盘；通过托盘“退出程序”并确认后才会停止播报。
+使用 Visual Studio 2022 打开 `AndonVoiceBroadcaster.csproj`，选择 .NET Framework 4.8、Debug/Release 和 Any CPU 构建；也可执行 `dotnet msbuild AndonVoiceBroadcaster.csproj -t:Rebuild -p:Configuration=Debug`。启动后关闭主窗口会最小化到托盘；通过托盘“退出程序”并确认后才会停止播报。安全退出会取消当前任务，最多等待协调器 5 秒，随后释放 HTTP、TTS、提示音和托盘资源并结束消息循环。
 
 ## 后端前置条件
 

@@ -61,7 +61,7 @@ namespace AndonVoiceBroadcaster.Forms
             _password = AddTextBox(panel, "登录密码", 2);
             _password.UseSystemPasswordChar = true;
             _terminalCode = AddTextBox(panel, "终端编号", 3);
-            _workshopNames = AddTextBox(panel, "车间名称（可选，逗号分隔）", 4);
+            _workshopNames = AddTextBox(panel, "车间 ID 或名称（可选，逗号分隔）", 4);
             _pollSeconds = AddNumber(panel, "查询间隔（秒）", 5, 1, 30, 2);
             _retrySeconds = AddNumber(panel, "网络重试（秒）", 6, 1, 300, 5);
             _ttsRate = AddNumber(panel, "TTS 语速", 7, -10, 10, 0);
@@ -112,7 +112,8 @@ namespace AndonVoiceBroadcaster.Forms
             _username.Text = _credentials.Username;
             _password.Text = _credentials.Password;
             _terminalCode.Text = _settings.TerminalCode;
-            _workshopNames.Text = string.Join(",", _settings.WorkshopNames ?? new List<string>());
+            _workshopNames.Text = string.Join(",", (_settings.WorkshopIdList ?? new List<long>()).Select(x => x.ToString())
+                .Concat(_settings.WorkshopNames ?? new List<string>()));
             _pollSeconds.Value = _settings.PollIntervalSeconds;
             _retrySeconds.Value = _settings.NetworkRetrySeconds;
             _ttsRate.Value = _settings.TtsRate;
@@ -125,15 +126,30 @@ namespace AndonVoiceBroadcaster.Forms
 
         private void SaveButtonOnClick(object sender, EventArgs eventArgs)
         {
-            List<string> workshopNames = (_workshopNames.Text ?? string.Empty)
+            List<string> workshopValues = (_workshopNames.Text ?? string.Empty)
                 .Split(new[] { ',', '，', ';', '；' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(x => x.Trim())
                 .Where(x => x.Length > 0)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            var workshopIds = new List<long>();
+            var workshopNames = new List<string>();
+            foreach (string value in workshopValues)
+            {
+                long workshopId;
+                if (long.TryParse(value, out workshopId) && workshopId >= 0)
+                {
+                    workshopIds.Add(workshopId);
+                }
+                else
+                {
+                    workshopNames.Add(value);
+                }
+            }
 
             _settings.MesBaseUrl = _mesBaseUrl.Text;
             _settings.TerminalCode = _terminalCode.Text;
+            _settings.WorkshopIdList = workshopIds.Distinct().ToList();
             _settings.WorkshopNames = workshopNames;
             _settings.PollIntervalSeconds = Decimal.ToInt32(_pollSeconds.Value);
             _settings.NetworkRetrySeconds = Decimal.ToInt32(_retrySeconds.Value);

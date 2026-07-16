@@ -23,6 +23,7 @@ namespace AndonVoiceBroadcaster.Services
         private volatile bool _paused;
         private bool _workshopsResolved;
         private int _consecutiveFailureCount;
+        private List<long> _resolvedWorkshopIds = new List<long>();
 
         public BroadcastCoordinator(
             AppSettings settings,
@@ -135,7 +136,7 @@ namespace AndonVoiceBroadcaster.Services
                     }
 
                     await EnsureLoggedInAsync(cancellationToken);
-                    List<VoiceBroadcastTask> tasks = await _apiClient.GetPendingTasksAsync(_settings.WorkshopIdList, cancellationToken);
+                    List<VoiceBroadcastTask> tasks = await _apiClient.GetPendingTasksAsync(_resolvedWorkshopIds, cancellationToken);
                     _consecutiveFailureCount = 0;
                     tasks = tasks.Where(x => x != null && x.IsPending)
                         .OrderBy(x => string.IsNullOrWhiteSpace(x.CreateTime) ? "9999-12-31 23:59:59" : x.CreateTime)
@@ -320,6 +321,7 @@ namespace AndonVoiceBroadcaster.Services
                 && _settings.WorkshopIdList != null
                 && _settings.WorkshopIdList.Count > 0)
             {
+                _resolvedWorkshopIds = _settings.WorkshopIdList.Distinct().ToList();
                 _workshopsResolved = true;
                 return;
             }
@@ -328,12 +330,12 @@ namespace AndonVoiceBroadcaster.Services
             if (_settings.WorkshopNames == null || _settings.WorkshopNames.Count == 0)
             {
                 // 参考 MES 以 0 表示同时包含未绑定产线的公共任务；其余 ID 覆盖全部车间产线。
-                _settings.WorkshopIdList = new[] { 0L }
+                _resolvedWorkshopIds = new[] { 0L }
                     .Concat(options.Where(x => x != null).Select(x => x.WorkshopId).Where(x => x > 0))
                     .Distinct()
                     .ToList();
                 _workshopsResolved = true;
-                _logger.Info("未限制播报车间，已加载全部车间 ID：" + string.Join(",", _settings.WorkshopIdList));
+                _logger.Info("未限制播报车间，已加载全部车间 ID：" + string.Join(",", _resolvedWorkshopIds));
                 return;
             }
             var byName = options
@@ -358,9 +360,12 @@ namespace AndonVoiceBroadcaster.Services
             {
                 throw new MesApiException("未匹配到车间：" + string.Join("、", missing) + "。请确认名称、启用状态及账号权限。");
             }
-            _settings.WorkshopIdList = matched.Distinct().ToList();
+            _resolvedWorkshopIds = matched
+                .Concat(_settings.WorkshopIdList ?? new List<long>())
+                .Distinct()
+                .ToList();
             _workshopsResolved = true;
-            _logger.Info("车间名称已解析为 ID：" + string.Join(",", _settings.WorkshopIdList));
+            _logger.Info("车间 ID/名称已解析为 ID：" + string.Join(",", _resolvedWorkshopIds));
         }
 
         private void RaiseStatus(string value)
