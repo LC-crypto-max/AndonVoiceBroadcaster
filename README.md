@@ -18,12 +18,15 @@
 
 账号密码保存在当前 Windows 用户 DPAPI 加密文件 `data/credentials.dat`，不写入明文配置。`audio/AlarmMusic.wav` 与生成的 EXE 一起部署。
 
+MES 登录或接口请求连续失败达到 `MaxRequestRetryCount`（默认 3 次）后，客户端会停止自动请求并进入暂停状态；排除故障后点击“继续播报”会清零失败计数并重新连接。
+
 ## 构建与运行
 
 使用 Visual Studio 2022 打开 `AndonVoiceBroadcaster.csproj`，选择 .NET Framework 4.8、Debug/Release 和 Any CPU 构建；也可执行 `dotnet msbuild AndonVoiceBroadcaster.csproj -t:Rebuild -p:Configuration=Debug`。启动后关闭主窗口会最小化到托盘；通过托盘“退出程序”并确认后才会停止播报。
 
 ## 后端前置条件
 
-- Java 侧已提供 `POST /system/voiceBroadcast/confirmPlayed` 原子确认接口。
+- 客户端沿用现有 PDA 接口：未达到次数时调用 `POST /system/voiceBroadcast/addBroadcastedNum`，达到次数时调用 `POST /system/voiceBroadcast/broadcastCompleted`。
+- 同一批任务只应由一台车间播报终端消费，避免 PDA 页面与 WinForms 客户端重复播放。
 - 登录账号需要车间列表查询权限，以及语音播报查询/确认权限。
 - 正式车间电脑不建议与 PDA `voicebroadcast` 页面同时消费同一批任务。

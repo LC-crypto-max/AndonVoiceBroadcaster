@@ -138,6 +138,12 @@ setup.exe
 # ==================================================
 # 本地配置和敏感信息
 # ==================================================
+# 本地项目记录不随源码提交
+docs/
+
+# DPAPI 加密凭据只能由生成它的 Windows 用户读取
+data/
+
 config/appsettings.local.json
 config/settings.local.json
 config/credentials.json

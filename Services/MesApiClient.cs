@@ -74,7 +74,12 @@ namespace AndonVoiceBroadcaster.Services
 
         public async Task<List<VoiceBroadcastTask>> GetPendingTasksAsync(List<long> workshopIds, CancellationToken cancellationToken)
         {
-            var query = new VoiceBroadcastQuery { WorkshopIdList = workshopIds, State = "0" };
+            // Java DTO 使用小驼峰字段名；显式构造请求，避免 .NET 属性名被序列化为 PascalCase。
+            var query = new Dictionary<string, object>
+            {
+                { "workshopIdList", workshopIds ?? new List<long>() },
+                { "state", "0" }
+            };
             TableDataResponse result = await SendAsync<TableDataResponse>(
                 HttpMethod.Post, "/sys/voiceBroadcast/getNotBroadcastRecord", query, true, cancellationToken);
             if (result.Code != 200 && result.Code != 0)
@@ -84,16 +89,28 @@ namespace AndonVoiceBroadcaster.Services
             return result.Rows ?? new List<VoiceBroadcastTask>();
         }
 
-        public async Task<bool> ConfirmPlayedAsync(long id, int expectedBroadcastedNum, CancellationToken cancellationToken)
+        public async Task<bool> ConfirmPlayedAsync(long id, int expectedBroadcastedNum, int voiceNum, CancellationToken cancellationToken)
         {
-            var request = new VoiceBroadcastTask { Id = id, BroadcastedNum = expectedBroadcastedNum };
+            int nextBroadcastedNum = expectedBroadcastedNum + 1;
+            bool completed = nextBroadcastedNum >= voiceNum;
+            var request = new Dictionary<string, object>
+            {
+                { "id", id },
+                { "broadcastedNum", nextBroadcastedNum }
+            };
             AjaxResult result = await SendAsync<AjaxResult>(
-                HttpMethod.Post, "/system/voiceBroadcast/confirmPlayed", request, true, cancellationToken);
+                HttpMethod.Post,
+                completed
+                    ? "/system/voiceBroadcast/broadcastCompleted"
+                    : "/system/voiceBroadcast/addBroadcastedNum",
+                request,
+                true,
+                cancellationToken);
             if (result.Code != 200)
             {
-                throw new MesApiException(result.Msg ?? "确认播报结果失败。");
+                throw new MesApiException(result.Msg ?? (completed ? "完成播报任务失败。" : "更新播报次数失败。"));
             }
-            return result.Confirmed;
+            return true;
         }
 
         public async Task<VoiceBroadcastTask> GetTaskAsync(long id, CancellationToken cancellationToken)

@@ -22,6 +22,7 @@ namespace AndonVoiceBroadcaster.Services
         private Task _runTask;
         private volatile bool _paused;
         private bool _workshopsResolved;
+        private int _consecutiveFailureCount;
 
         public BroadcastCoordinator(
             AppSettings settings,
@@ -75,9 +76,10 @@ namespace AndonVoiceBroadcaster.Services
 
         public void Resume()
         {
+            _consecutiveFailureCount = 0;
             _paused = false;
             RaiseStatus("运行中");
-            _logger.Info("播报已恢复。");
+            _logger.Info("播报已恢复，连续失败计数已清零。");
         }
 
         public async Task StopAsync()
@@ -134,6 +136,7 @@ namespace AndonVoiceBroadcaster.Services
 
                     await EnsureLoggedInAsync(cancellationToken);
                     List<VoiceBroadcastTask> tasks = await _apiClient.GetPendingTasksAsync(_settings.WorkshopIdList, cancellationToken);
+                    _consecutiveFailureCount = 0;
                     tasks = tasks.Where(x => x != null && x.IsPending)
                         .OrderBy(x => string.IsNullOrWhiteSpace(x.CreateTime) ? "9999-12-31 23:59:59" : x.CreateTime)
                         .ThenBy(x => x.Id)
@@ -161,15 +164,11 @@ namespace AndonVoiceBroadcaster.Services
                 {
                     _apiClient.ClearToken();
                     _workshopsResolved = false;
-                    RaiseStatus("MES 登录已失效，正在重新登录");
-                    _logger.Warn(exception.Message);
-                    retryDelaySeconds = _settings.NetworkRetrySeconds;
+                    retryDelaySeconds = RegisterFailure("MES 登录已失效", exception);
                 }
                 catch (Exception exception)
                 {
-                    RaiseStatus("MES 连接异常，等待重试");
-                    _logger.Error("播报循环发生异常。", exception);
-                    retryDelaySeconds = _settings.NetworkRetrySeconds;
+                    retryDelaySeconds = RegisterFailure("MES 连接或接口异常", exception);
                 }
 
                 if (retryDelaySeconds > 0)
@@ -178,6 +177,24 @@ namespace AndonVoiceBroadcaster.Services
                 }
             }
             _logger.Info("播报协调器已停止。");
+        }
+
+        private int RegisterFailure(string summary, Exception exception)
+        {
+            _consecutiveFailureCount++;
+            int maximum = Math.Max(1, _settings.MaxRequestRetryCount);
+            _logger.Error(summary + "，连续失败 " + _consecutiveFailureCount + "/" + maximum + "。", exception);
+
+            if (_consecutiveFailureCount >= maximum)
+            {
+                _paused = true;
+                RaiseStatus("连续失败已达上限，已暂停；请检查后点击继续播报");
+                _logger.Warn("已达到最大重试次数，停止自动请求 MES。修复配置或服务后，请点击“继续播报”。");
+                return 0;
+            }
+
+            RaiseStatus(summary + "，等待第 " + (_consecutiveFailureCount + 1) + " 次尝试");
+            return _settings.NetworkRetrySeconds;
         }
 
         private async Task ProcessTaskAsync(VoiceBroadcastTask task, CancellationToken cancellationToken)
@@ -220,7 +237,7 @@ namespace AndonVoiceBroadcaster.Services
                     return;
                 }
 
-                bool confirmed = await ConfirmPlayedWithRecoveryAsync(task.Id, expectedBroadcastedNum, cancellationToken);
+                bool confirmed = await ConfirmPlayedWithRecoveryAsync(task.Id, expectedBroadcastedNum, task.VoiceNum, cancellationToken);
                 if (!confirmed)
                 {
                     _logger.Warn("任务 " + task.Id + " 的确认被拒绝或状态已变化，将重新查询任务。\r\n");
@@ -239,12 +256,12 @@ namespace AndonVoiceBroadcaster.Services
             }
         }
 
-        private async Task<bool> ConfirmPlayedWithRecoveryAsync(long taskId, int expectedBroadcastedNum, CancellationToken cancellationToken)
+        private async Task<bool> ConfirmPlayedWithRecoveryAsync(long taskId, int expectedBroadcastedNum, int voiceNum, CancellationToken cancellationToken)
         {
             bool reloginRequired = false;
             try
             {
-                return await _apiClient.ConfirmPlayedAsync(taskId, expectedBroadcastedNum, cancellationToken);
+                return await _apiClient.ConfirmPlayedAsync(taskId, expectedBroadcastedNum, voiceNum, cancellationToken);
             }
             catch (MesUnauthorizedException)
             {
@@ -275,12 +292,12 @@ namespace AndonVoiceBroadcaster.Services
             {
                 return false;
             }
-            return await _apiClient.ConfirmPlayedAsync(taskId, expectedBroadcastedNum, cancellationToken);
+            return await _apiClient.ConfirmPlayedAsync(taskId, expectedBroadcastedNum, voiceNum, cancellationToken);
         }
 
         private async Task EnsureLoggedInAsync(CancellationToken cancellationToken)
         {
-            if (_apiClient.HasToken && (_workshopsResolved || _settings.WorkshopNames == null || _settings.WorkshopNames.Count == 0))
+            if (_apiClient.HasToken && _workshopsResolved)
             {
                 return;
             }
@@ -299,13 +316,26 @@ namespace AndonVoiceBroadcaster.Services
 
         private async Task ResolveWorkshopsAsync(CancellationToken cancellationToken)
         {
-            if (_settings.WorkshopNames == null || _settings.WorkshopNames.Count == 0)
+            if ((_settings.WorkshopNames == null || _settings.WorkshopNames.Count == 0)
+                && _settings.WorkshopIdList != null
+                && _settings.WorkshopIdList.Count > 0)
             {
                 _workshopsResolved = true;
                 return;
             }
 
             List<WorkshopOption> options = await _apiClient.GetWorkshopsAsync(cancellationToken);
+            if (_settings.WorkshopNames == null || _settings.WorkshopNames.Count == 0)
+            {
+                // 参考 MES 以 0 表示同时包含未绑定产线的公共任务；其余 ID 覆盖全部车间产线。
+                _settings.WorkshopIdList = new[] { 0L }
+                    .Concat(options.Where(x => x != null).Select(x => x.WorkshopId).Where(x => x > 0))
+                    .Distinct()
+                    .ToList();
+                _workshopsResolved = true;
+                _logger.Info("未限制播报车间，已加载全部车间 ID：" + string.Join(",", _settings.WorkshopIdList));
+                return;
+            }
             var byName = options
                 .Where(x => x != null && x.WorkshopId >= 0 && !string.IsNullOrWhiteSpace(x.WorkshopName))
                 .GroupBy(x => x.WorkshopName.Trim(), StringComparer.OrdinalIgnoreCase)

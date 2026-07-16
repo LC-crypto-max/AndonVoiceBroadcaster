@@ -274,7 +274,14 @@ namespace AndonVoiceBroadcaster.Forms
 
         private void SetStatus(string status)
         {
-            InvokeIfAvailable(() => _statusValue.Text = status);
+            InvokeIfAvailable(() =>
+            {
+                _statusValue.Text = status;
+                if (_coordinator != null)
+                {
+                    _pauseButton.Text = _coordinator.IsPaused ? "继续播报" : "暂停播报";
+                }
+            });
         }
 
         private void ShowCurrentTask(VoiceBroadcastTask task)
