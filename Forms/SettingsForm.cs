@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Threading;
 using System.Windows.Forms;
 using AndonVoiceBroadcaster.Models;
 using AndonVoiceBroadcaster.Services;
@@ -17,7 +18,14 @@ namespace AndonVoiceBroadcaster.Forms
         private TextBox _username;
         private TextBox _password;
         private TextBox _terminalCode;
-        private TextBox _workshopNames;
+        private ListBox _availableWorkshops;
+        private ListBox _selectedWorkshops;
+        private Button _refreshWorkshopButton;
+        private Button _addWorkshopButton;
+        private Button _removeWorkshopButton;
+        private Button _addAllButton;
+        private Button _removeAllButton;
+        private List<WorkshopOption> _workshopOptions;
         private NumericUpDown _pollSeconds;
         private NumericUpDown _retrySeconds;
         private NumericUpDown _ttsRate;
@@ -43,14 +51,14 @@ namespace AndonVoiceBroadcaster.Forms
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
-            ClientSize = new Size(650, 445);
+            ClientSize = new Size(700, 550);
 
             var panel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 Padding = new Padding(14),
                 ColumnCount = 2,
-                RowCount = 13,
+                RowCount = 11,
                 AutoSize = false
             };
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
@@ -61,7 +69,50 @@ namespace AndonVoiceBroadcaster.Forms
             _password = AddTextBox(panel, "登录密码", 2);
             _password.UseSystemPasswordChar = true;
             _terminalCode = AddTextBox(panel, "终端编号", 3);
-            _workshopNames = AddTextBox(panel, "车间 ID 或名称（可选，逗号分隔）", 4);
+
+            panel.Controls.Add(new Label { Text = "选择车间", TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill }, 0, 4);
+            
+            var workshopTable = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 2,
+                AutoSize = false
+            };
+            workshopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            workshopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            workshopTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            workshopTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+
+            _availableWorkshops = new ListBox { Dock = DockStyle.Fill, Margin = new Padding(3, 5, 3, 5) };
+            workshopTable.Controls.Add(_availableWorkshops, 0, 0);
+
+            _selectedWorkshops = new ListBox { Dock = DockStyle.Fill, Margin = new Padding(3, 5, 3, 5) };
+            workshopTable.Controls.Add(_selectedWorkshops, 1, 0);
+
+            var buttonPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(3) };
+            _addWorkshopButton = new Button { Text = "添加 ->", Width = 80, Margin = new Padding(3, 3, 3, 3) };
+            _addWorkshopButton.Click += AddWorkshopButtonOnClick;
+            _addAllButton = new Button { Text = "全部添加", Width = 80, Margin = new Padding(3, 3, 3, 3) };
+            _addAllButton.Click += AddAllButtonOnClick;
+            _removeWorkshopButton = new Button { Text = "<- 移除", Width = 80, Margin = new Padding(3, 3, 3, 3) };
+            _removeWorkshopButton.Click += RemoveWorkshopButtonOnClick;
+            _removeAllButton = new Button { Text = "全部移除", Width = 80, Margin = new Padding(3, 3, 3, 3) };
+            _removeAllButton.Click += RemoveAllButtonOnClick;
+            var spacer = new Panel { Width = 10 };
+            _refreshWorkshopButton = new Button { Text = "刷新车间列表", Width = 120, Margin = new Padding(3, 3, 3, 3) };
+            _refreshWorkshopButton.Click += RefreshWorkshopButtonOnClick;
+            buttonPanel.Controls.Add(_addWorkshopButton);
+            buttonPanel.Controls.Add(_addAllButton);
+            buttonPanel.Controls.Add(_removeWorkshopButton);
+            buttonPanel.Controls.Add(_removeAllButton);
+            buttonPanel.Controls.Add(spacer);
+            buttonPanel.Controls.Add(_refreshWorkshopButton);
+            workshopTable.Controls.Add(buttonPanel, 0, 1);
+            workshopTable.SetColumnSpan(buttonPanel, 2);
+
+            panel.Controls.Add(workshopTable, 1, 4);
+
             _pollSeconds = AddNumber(panel, "查询间隔（秒）", 5, 1, 30, 2);
             _retrySeconds = AddNumber(panel, "网络重试（秒）", 6, 1, 300, 5);
             _ttsRate = AddNumber(panel, "TTS 语速", 7, -10, 10, 0);
@@ -112,8 +163,6 @@ namespace AndonVoiceBroadcaster.Forms
             _username.Text = _credentials.Username;
             _password.Text = _credentials.Password;
             _terminalCode.Text = _settings.TerminalCode;
-            _workshopNames.Text = string.Join(",", (_settings.WorkshopIdList ?? new List<long>()).Select(x => x.ToString())
-                .Concat(_settings.WorkshopNames ?? new List<string>()));
             _pollSeconds.Value = _settings.PollIntervalSeconds;
             _retrySeconds.Value = _settings.NetworkRetrySeconds;
             _ttsRate.Value = _settings.TtsRate;
@@ -126,32 +175,29 @@ namespace AndonVoiceBroadcaster.Forms
 
         private void SaveButtonOnClick(object sender, EventArgs eventArgs)
         {
-            List<string> workshopValues = (_workshopNames.Text ?? string.Empty)
-                .Split(new[] { ',', '，', ';', '；' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim())
-                .Where(x => x.Length > 0)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
             var workshopIds = new List<long>();
             var workshopNames = new List<string>();
-            // 数字按车间 ID 保存，其他内容按车间名称保存。
-            foreach (string value in workshopValues)
+
+            foreach (var item in _selectedWorkshops.Items)
             {
-                long workshopId;
-                if (long.TryParse(value, out workshopId) && workshopId >= 0)
+                string display = item.ToString();
+                int dashIndex = display.IndexOf(" - ");
+                if (dashIndex > 0)
                 {
-                    workshopIds.Add(workshopId);
-                }
-                else
-                {
-                    workshopNames.Add(value);
+                    string idStr = display.Substring(0, dashIndex);
+                    string name = display.Substring(dashIndex + 3);
+                    if (long.TryParse(idStr, out long workshopId))
+                    {
+                        workshopIds.Add(workshopId);
+                        workshopNames.Add(name);
+                    }
                 }
             }
 
             _settings.MesBaseUrl = _mesBaseUrl.Text;
             _settings.TerminalCode = _terminalCode.Text;
             _settings.WorkshopIdList = workshopIds.Distinct().ToList();
-            _settings.WorkshopNames = workshopNames;
+            _settings.WorkshopNames = workshopNames.Distinct().ToList();
             _settings.PollIntervalSeconds = Decimal.ToInt32(_pollSeconds.Value);
             _settings.NetworkRetrySeconds = Decimal.ToInt32(_retrySeconds.Value);
             _settings.TtsRate = Decimal.ToInt32(_ttsRate.Value);
@@ -182,6 +228,108 @@ namespace AndonVoiceBroadcaster.Forms
             _settingsService.SaveCredentials(_credentials);
             DialogResult = DialogResult.OK;
             Close();
+        }
+
+        private async void RefreshWorkshopButtonOnClick(object sender, EventArgs eventArgs)
+        {
+            if (!_settings.IsComplete() || !_credentials.IsComplete())
+            {
+                MessageBox.Show("请先填写完整的 MES 服务地址、账号和密码。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            _refreshWorkshopButton.Enabled = false;
+            try
+            {
+                using (var apiClient = new MesApiClient(_settings.MesBaseUrl, _settings.LoginEndpoint))
+                {
+                    await apiClient.LoginAsync(_credentials, CancellationToken.None);
+                    _workshopOptions = await apiClient.GetWorkshopsAsync(CancellationToken.None);
+                }
+
+                _availableWorkshops.Items.Clear();
+                _selectedWorkshops.Items.Clear();
+                foreach (WorkshopOption option in _workshopOptions)
+                {
+                    _availableWorkshops.Items.Add($"{option.WorkshopId} - {option.WorkshopName}");
+                }
+
+                SyncSelectedWorkshops();
+                MessageBox.Show($"已加载 {_workshopOptions.Count} 个车间。", "刷新成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"加载车间列表失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                _refreshWorkshopButton.Enabled = true;
+            }
+        }
+
+        private void SyncSelectedWorkshops()
+        {
+            if (_workshopOptions == null)
+            {
+                return;
+            }
+            var savedIds = (_settings.WorkshopIdList ?? new List<long>()).ToHashSet();
+            var savedNames = (_settings.WorkshopNames ?? new List<string>()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            
+            for (int i = _availableWorkshops.Items.Count - 1; i >= 0; i--)
+            {
+                string display = _availableWorkshops.Items[i].ToString();
+                int dashIndex = display.IndexOf(" - ");
+                if (dashIndex > 0)
+                {
+                    string idStr = display.Substring(0, dashIndex);
+                    string name = display.Substring(dashIndex + 3);
+                    if (long.TryParse(idStr, out long workshopId) && 
+                        (savedIds.Contains(workshopId) || savedNames.Contains(name.Trim())))
+                    {
+                        _selectedWorkshops.Items.Add(display);
+                        _availableWorkshops.Items.RemoveAt(i);
+                    }
+                }
+            }
+        }
+
+        private void AddWorkshopButtonOnClick(object sender, EventArgs eventArgs)
+        {
+            while (_availableWorkshops.SelectedItems.Count > 0)
+            {
+                var item = _availableWorkshops.SelectedItems[0];
+                _selectedWorkshops.Items.Add(item);
+                _availableWorkshops.Items.Remove(item);
+            }
+        }
+
+        private void RemoveWorkshopButtonOnClick(object sender, EventArgs eventArgs)
+        {
+            while (_selectedWorkshops.SelectedItems.Count > 0)
+            {
+                var item = _selectedWorkshops.SelectedItems[0];
+                _availableWorkshops.Items.Add(item);
+                _selectedWorkshops.Items.Remove(item);
+            }
+        }
+
+        private void AddAllButtonOnClick(object sender, EventArgs eventArgs)
+        {
+            while (_availableWorkshops.Items.Count > 0)
+            {
+                _selectedWorkshops.Items.Add(_availableWorkshops.Items[0]);
+                _availableWorkshops.Items.RemoveAt(0);
+            }
+        }
+
+        private void RemoveAllButtonOnClick(object sender, EventArgs eventArgs)
+        {
+            while (_selectedWorkshops.Items.Count > 0)
+            {
+                _availableWorkshops.Items.Add(_selectedWorkshops.Items[0]);
+                _selectedWorkshops.Items.RemoveAt(0);
+            }
         }
     }
 }
