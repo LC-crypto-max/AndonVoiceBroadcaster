@@ -18,6 +18,7 @@ namespace AndonVoiceBroadcaster.Services
         private readonly string _baseUrl;
         private readonly string _loginEndpoint;
         private string _token;
+        private long? _currentTenantId;
 
         public MesApiClient(string baseUrl, string loginEndpoint)
         {
@@ -31,9 +32,15 @@ namespace AndonVoiceBroadcaster.Services
             get { return !string.IsNullOrWhiteSpace(_token); }
         }
 
+        public long? CurrentTenantId
+        {
+            get { return _currentTenantId; }
+        }
+
         public void ClearToken()
         {
             _token = null;
+            _currentTenantId = null;
         }
 
         public async Task LoginAsync(MesCredentials credentials, CancellationToken cancellationToken)
@@ -54,6 +61,40 @@ namespace AndonVoiceBroadcaster.Services
                 throw new MesApiException(string.IsNullOrWhiteSpace(result.Msg) ? "MES 登录失败。" : result.Msg);
             }
             _token = result.Token;
+            _currentTenantId = result.TenantId;
+        }
+
+        public async Task<FactoryOption> GetCurrentFactoryAsync(CancellationToken cancellationToken)
+        {
+            if (!_currentTenantId.HasValue)
+            {
+                return null;
+            }
+
+            var factory = new FactoryOption
+            {
+                FactoryId = _currentTenantId.Value,
+                FactoryName = "当前登录工厂"
+            };
+            try
+            {
+                AjaxResultWithData result = await SendAsync<AjaxResultWithData>(
+                    HttpMethod.Get, "/system/tenant/" + _currentTenantId.Value, null, true, cancellationToken);
+                if ((result.Code == 200 || result.Code == 0) && result.Data != null)
+                {
+                    string raw = _json.Serialize(result.Data);
+                    TenantData tenant = _json.Deserialize<TenantData>(raw);
+                    if (tenant != null && !string.IsNullOrWhiteSpace(tenant.TenantName))
+                    {
+                        factory.FactoryName = tenant.TenantName.Trim();
+                    }
+                }
+            }
+            catch (MesApiException)
+            {
+                // 普通操作员可能没有租户详情权限；此时仍可用登录返回的 tenantId 标识当前工厂。
+            }
+            return factory;
         }
 
         public async Task<List<WorkshopOption>> GetWorkshopsAsync(CancellationToken cancellationToken)
@@ -200,6 +241,12 @@ namespace AndonVoiceBroadcaster.Services
             public int Code { get; set; }
             public string Msg { get; set; }
             public object Data { get; set; }
+        }
+
+        private sealed class TenantData
+        {
+            public long Id { get; set; }
+            public string TenantName { get; set; }
         }
     }
 

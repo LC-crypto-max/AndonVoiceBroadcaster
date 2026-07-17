@@ -53,6 +53,7 @@
     </Compile>
     <Compile Include="Models\AppSettings.cs" />
     <Compile Include="Models\MesCredentials.cs" />
+    <Compile Include="Models\FactoryOption.cs" />
     <Compile Include="Models\WorkshopOption.cs" />
     <Compile Include="Models\VoiceBroadcastTask.cs" />
     <Compile Include="Services\BroadcastCoordinator.cs" />

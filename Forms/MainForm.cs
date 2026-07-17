@@ -58,7 +58,7 @@ namespace AndonVoiceBroadcaster.Forms
             topPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
             _statusValue = AddStatusField(topPanel, "运行状态", 0, 0);
             _terminalValue = AddStatusField(topPanel, "终端编号", 2, 0);
-            _workshopValue = AddStatusField(topPanel, "播报车间", 0, 1);
+            _workshopValue = AddStatusField(topPanel, "工厂 / 车间", 0, 1);
             _currentTaskValue = AddStatusField(topPanel, "当前任务", 2, 1);
 
             var buttonPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(12, 4, 12, 4) };
@@ -137,11 +137,15 @@ namespace AndonVoiceBroadcaster.Forms
             _settings.Normalize();
             new StartupService().Configure(_settings.StartWithWindows, Application.ExecutablePath);
             _terminalValue.Text = _settings.TerminalCode;
-            _workshopValue.Text = _settings.WorkshopNames != null && _settings.WorkshopNames.Count > 0
+            string workshopText = _settings.WorkshopNames != null && _settings.WorkshopNames.Count > 0
                 ? string.Join(",", _settings.WorkshopNames)
                 : (_settings.WorkshopIdList != null && _settings.WorkshopIdList.Count > 0
                     ? string.Join(",", _settings.WorkshopIdList)
                     : "未限制（可选）");
+            string factoryText = !string.IsNullOrWhiteSpace(_settings.FactoryName)
+                ? _settings.FactoryName
+                : (_settings.FactoryId.HasValue ? "工厂 " + _settings.FactoryId.Value : "当前登录工厂");
+            _workshopValue.Text = factoryText + " / " + workshopText;
 
             try
             {

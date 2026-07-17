@@ -135,7 +135,9 @@ namespace AndonVoiceBroadcaster.Services
         private async Task RunLoopAsync(CancellationToken cancellationToken)
         {
             RaiseStatus("正在连接 MES");
-            _logger.Info("播报协调器已启动，终端=" + _settings.TerminalCode);
+            _logger.Info("播报协调器已启动，终端=" + _settings.TerminalCode
+                + "，工作时间=" + _settings.WorkStartTime + "-" + _settings.WorkEndTime
+                + (string.IsNullOrWhiteSpace(_settings.FactoryName) ? string.Empty : "，工厂=" + _settings.FactoryName));
             // 持续轮询 MES，并按创建时间依次处理待播报任务。
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -145,6 +147,19 @@ namespace AndonVoiceBroadcaster.Services
                     if (_paused)
                     {
                         await Task.Delay(500, cancellationToken);
+                        continue;
+                    }
+
+                    DateTime now = DateTime.Now;
+                    if (!_settings.IsWithinWorkHours(now))
+                    {
+                        TimeSpan wait = _settings.GetDelayUntilWorkStarts(now);
+                        string hours = _settings.WorkStartTime + "-" + _settings.WorkEndTime;
+                        RaiseStatus("非工作时间（" + hours + "），到点自动恢复");
+                        RaiseCurrentTask(null);
+                        RaiseTaskList(new List<VoiceBroadcastTask>());
+                        _logger.Info("当前不在播报时段 " + hours + "，等待 " + wait.TotalMinutes.ToString("0") + " 分钟后恢复。");
+                        await Task.Delay(wait, cancellationToken);
                         continue;
                     }
 
@@ -161,7 +176,7 @@ namespace AndonVoiceBroadcaster.Services
 
                     foreach (VoiceBroadcastTask task in tasks)
                     {
-                        if (cancellationToken.IsCancellationRequested || _paused)
+                        if (cancellationToken.IsCancellationRequested || _paused || !_settings.IsWithinWorkHours(DateTime.Now))
                         {
                             break;
                         }
@@ -222,7 +237,7 @@ namespace AndonVoiceBroadcaster.Services
 
             while (task.IsPending && !_paused)
             {
-                if (cancellationToken.IsCancellationRequested)
+                if (cancellationToken.IsCancellationRequested || !_settings.IsWithinWorkHours(DateTime.Now))
                 {
                     return;
                 }
@@ -357,6 +372,15 @@ namespace AndonVoiceBroadcaster.Services
             }
 
             List<WorkshopOption> options = await _apiClient.GetWorkshopsAsync(cancellationToken);
+            if (_settings.FactoryId.HasValue && options.Any(x => x != null && x.TenantId.HasValue))
+            {
+                options = options.Where(x => x != null && x.TenantId == _settings.FactoryId).ToList();
+                if (options.Count == 0)
+                {
+                    throw new MesApiException("当前账号未查询到所选工厂（ID " + _settings.FactoryId.Value + "）下的可用车间。");
+                }
+                _logger.Info("已按工厂过滤车间：" + (_settings.FactoryName ?? string.Empty) + "（ID " + _settings.FactoryId.Value + "）。");
+            }
             if (_settings.WorkshopNames == null || _settings.WorkshopNames.Count == 0)
             {
                 // 参考 MES 以 0 表示同时包含未绑定产线的公共任务；其余 ID 覆盖全部车间产线。

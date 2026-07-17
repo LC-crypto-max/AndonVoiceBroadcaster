@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
@@ -18,6 +19,7 @@ namespace AndonVoiceBroadcaster.Forms
         private TextBox _username;
         private TextBox _password;
         private TextBox _terminalCode;
+        private ComboBox _factory;
         private ListBox _availableWorkshops;
         private ListBox _selectedWorkshops;
         private Button _refreshWorkshopButton;
@@ -28,12 +30,15 @@ namespace AndonVoiceBroadcaster.Forms
         private Label _availableWorkshopCount;
         private Label _selectedWorkshopCount;
         private List<WorkshopOption> _workshopOptions;
+        private bool _bindingFactory;
         private NumericUpDown _pollSeconds;
         private NumericUpDown _retrySeconds;
         private NumericUpDown _ttsRate;
         private NumericUpDown _ttsVolume;
         private TextBox _testSpeechText;
         private NumericUpDown _broadcastInterval;
+        private DateTimePicker _workStartTime;
+        private DateTimePicker _workEndTime;
         private CheckBox _startWithWindows;
         private CheckBox _startMinimized;
 
@@ -54,7 +59,7 @@ namespace AndonVoiceBroadcaster.Forms
             MaximizeBox = true;
             MinimizeBox = false;
             ClientSize = new Size(900, 700);
-            MinimumSize = new Size(820, 650);
+            MinimumSize = new Size(820, 680);
 
             var panel = new TableLayoutPanel
             {
@@ -71,7 +76,7 @@ namespace AndonVoiceBroadcaster.Forms
                 panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             }
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 118));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
             panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
             panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
 
@@ -92,28 +97,39 @@ namespace AndonVoiceBroadcaster.Forms
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 3,
-                RowCount = 3,
+                RowCount = 4,
                 AutoSize = false
             };
             workshopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             workshopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
             workshopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            workshopTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             workshopTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
             workshopTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             workshopTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
 
-            workshopTable.Controls.Add(new Label { Text = "可用车间", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
-            workshopTable.Controls.Add(new Label { Text = "已选车间", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 2, 0);
+            var factoryPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+            factoryPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
+            factoryPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            factoryPanel.Controls.Add(new Label { Text = "选择工厂", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            _factory = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 3, 0, 3) };
+            _factory.SelectedIndexChanged += FactoryOnSelectedIndexChanged;
+            factoryPanel.Controls.Add(_factory, 1, 0);
+            workshopTable.Controls.Add(factoryPanel, 0, 0);
+            workshopTable.SetColumnSpan(factoryPanel, 3);
+
+            workshopTable.Controls.Add(new Label { Text = "可用车间", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
+            workshopTable.Controls.Add(new Label { Text = "已选车间", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 2, 1);
 
             _availableWorkshops = CreateWorkshopListBox();
             _availableWorkshops.DoubleClick += AddWorkshopButtonOnClick;
             _availableWorkshops.SelectedIndexChanged += WorkshopSelectionChanged;
-            workshopTable.Controls.Add(_availableWorkshops, 0, 1);
+            workshopTable.Controls.Add(_availableWorkshops, 0, 2);
 
             _selectedWorkshops = CreateWorkshopListBox();
             _selectedWorkshops.DoubleClick += RemoveWorkshopButtonOnClick;
             _selectedWorkshops.SelectedIndexChanged += WorkshopSelectionChanged;
-            workshopTable.Controls.Add(_selectedWorkshops, 2, 1);
+            workshopTable.Controls.Add(_selectedWorkshops, 2, 2);
 
             var buttonPanel = new FlowLayoutPanel
             {
@@ -122,28 +138,28 @@ namespace AndonVoiceBroadcaster.Forms
                 WrapContents = false,
                 Padding = new Padding(8, 0, 8, 0)
             };
-            _addWorkshopButton = new Button { Text = "添加 >", Width = 90, Height = 26, Margin = new Padding(0, 1, 0, 1) };
+            _addWorkshopButton = new Button { Text = "添加 >", Width = 90, Height = 22, Margin = new Padding(0) };
             _addWorkshopButton.Click += AddWorkshopButtonOnClick;
-            _removeWorkshopButton = new Button { Text = "< 移除", Width = 90, Height = 26, Margin = new Padding(0, 1, 0, 5) };
+            _removeWorkshopButton = new Button { Text = "< 移除", Width = 90, Height = 22, Margin = new Padding(0) };
             _removeWorkshopButton.Click += RemoveWorkshopButtonOnClick;
-            _addAllButton = new Button { Text = "全部 >>", Width = 90, Height = 26, Margin = new Padding(0, 1, 0, 1) };
+            _addAllButton = new Button { Text = "全部 >>", Width = 90, Height = 22, Margin = new Padding(0) };
             _addAllButton.Click += AddAllButtonOnClick;
-            _removeAllButton = new Button { Text = "<< 清空", Width = 90, Height = 26, Margin = new Padding(0, 1, 0, 1) };
+            _removeAllButton = new Button { Text = "<< 清空", Width = 90, Height = 22, Margin = new Padding(0) };
             _removeAllButton.Click += RemoveAllButtonOnClick;
             buttonPanel.Controls.Add(_addWorkshopButton);
             buttonPanel.Controls.Add(_removeWorkshopButton);
             buttonPanel.Controls.Add(_addAllButton);
             buttonPanel.Controls.Add(_removeAllButton);
-            workshopTable.Controls.Add(buttonPanel, 1, 0);
+            workshopTable.Controls.Add(buttonPanel, 1, 1);
             workshopTable.SetRowSpan(buttonPanel, 2);
 
             _availableWorkshopCount = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
             _selectedWorkshopCount = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
             _refreshWorkshopButton = new Button { Text = "刷新列表", Dock = DockStyle.Fill, Margin = new Padding(8, 3, 8, 3) };
             _refreshWorkshopButton.Click += RefreshWorkshopButtonOnClick;
-            workshopTable.Controls.Add(_availableWorkshopCount, 0, 2);
-            workshopTable.Controls.Add(_refreshWorkshopButton, 1, 2);
-            workshopTable.Controls.Add(_selectedWorkshopCount, 2, 2);
+            workshopTable.Controls.Add(_availableWorkshopCount, 0, 3);
+            workshopTable.Controls.Add(_refreshWorkshopButton, 1, 3);
+            workshopTable.Controls.Add(_selectedWorkshopCount, 2, 3);
 
             workshopGroup.Controls.Add(workshopTable);
             panel.Controls.Add(workshopGroup, 0, 4);
@@ -160,15 +176,15 @@ namespace AndonVoiceBroadcaster.Forms
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 4,
-                RowCount = 3
+                RowCount = 4
             };
             parameterTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
             parameterTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             parameterTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
             parameterTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            for (int row = 0; row < 3; row++)
+            for (int row = 0; row < 4; row++)
             {
-                parameterTable.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33F));
+                parameterTable.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
             }
             _pollSeconds = AddNumber(parameterTable, "查询间隔（秒）", 0, 1, 30, 2, 0);
             _retrySeconds = AddNumber(parameterTable, "网络重试（秒）", 0, 1, 300, 5, 2);
@@ -176,6 +192,8 @@ namespace AndonVoiceBroadcaster.Forms
             _ttsVolume = AddNumber(parameterTable, "TTS 音量", 1, 0, 100, 100, 2);
             _testSpeechText = AddTextBox(parameterTable, "本地测试文本", 2, 0);
             _broadcastInterval = AddNumber(parameterTable, "播报间隔（秒）", 2, 0, 60, 1, 2);
+            _workStartTime = AddTimePicker(parameterTable, "上班开始时间", 3, 0);
+            _workEndTime = AddTimePicker(parameterTable, "下班停止时间", 3, 2);
             parameterGroup.Controls.Add(parameterTable);
             panel.Controls.Add(parameterGroup, 0, 5);
             panel.SetColumnSpan(parameterGroup, 2);
@@ -229,6 +247,21 @@ namespace AndonVoiceBroadcaster.Forms
             return number;
         }
 
+        private static DateTimePicker AddTimePicker(TableLayoutPanel panel, string label, int row, int labelColumn)
+        {
+            panel.Controls.Add(new Label { Text = label, TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill }, labelColumn, row);
+            var picker = new DateTimePicker
+            {
+                Dock = DockStyle.Fill,
+                Format = DateTimePickerFormat.Custom,
+                CustomFormat = "HH:mm",
+                ShowUpDown = true,
+                Margin = new Padding(3, 5, 3, 5)
+            };
+            panel.Controls.Add(picker, labelColumn + 1, row);
+            return picker;
+        }
+
         private void BindValues()
         {
             _mesBaseUrl.Text = _settings.MesBaseUrl;
@@ -241,8 +274,11 @@ namespace AndonVoiceBroadcaster.Forms
             _ttsVolume.Value = _settings.TtsVolume;
             _testSpeechText.Text = _settings.TestSpeechText;
             _broadcastInterval.Value = _settings.BroadcastIntervalSeconds;
+            _workStartTime.Value = DateTime.Today.Add(_settings.GetWorkStartTime());
+            _workEndTime.Value = DateTime.Today.Add(_settings.GetWorkEndTime());
             _startWithWindows.Checked = _settings.StartWithWindows;
             _startMinimized.Checked = _settings.StartMinimized;
+            BindSavedFactorySelection();
             BindSavedWorkshopSelection();
             UpdateWorkshopControls();
         }
@@ -280,10 +316,20 @@ namespace AndonVoiceBroadcaster.Forms
                 MessageBox.Show("配置 MES 联调时，请同时填写登录账号和密码。", "设置校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            TimeSpan workStart = _workStartTime.Value.TimeOfDay;
+            TimeSpan workEnd = _workEndTime.Value.TimeOfDay;
+            if (workEnd <= workStart)
+            {
+                MessageBox.Show("下班停止时间必须晚于上班开始时间。", "设置校验", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
             // 校验通过后再更新共享设置对象，避免无效输入或取消窗口影响正在运行的协调器。
             _settings.MesBaseUrl = mesBaseUrl;
             _settings.TerminalCode = _terminalCode.Text;
+            FactoryOption selectedFactory = _factory.SelectedItem as FactoryOption;
+            _settings.FactoryId = selectedFactory == null ? null : selectedFactory.FactoryId;
+            _settings.FactoryName = selectedFactory == null ? string.Empty : selectedFactory.FactoryName;
             _settings.WorkshopIdList = workshopIds.Distinct().ToList();
             _settings.WorkshopNames = workshopNames.Distinct().ToList();
             _settings.PollIntervalSeconds = Decimal.ToInt32(_pollSeconds.Value);
@@ -292,6 +338,8 @@ namespace AndonVoiceBroadcaster.Forms
             _settings.TtsVolume = Decimal.ToInt32(_ttsVolume.Value);
             _settings.TestSpeechText = _testSpeechText.Text;
             _settings.BroadcastIntervalSeconds = Decimal.ToInt32(_broadcastInterval.Value);
+            _settings.WorkStartTime = workStart.ToString(@"hh\:mm", CultureInfo.InvariantCulture);
+            _settings.WorkEndTime = workEnd.ToString(@"hh\:mm", CultureInfo.InvariantCulture);
             _settings.StartWithWindows = _startWithWindows.Checked;
             _settings.StartMinimized = _startMinimized.Checked;
             _settings.Normalize();
@@ -331,25 +379,16 @@ namespace AndonVoiceBroadcaster.Forms
             _refreshWorkshopButton.Text = "正在加载...";
             try
             {
+                FactoryOption currentFactory;
                 using (var apiClient = new MesApiClient(mesBaseUrl, _settings.LoginEndpoint))
                 {
                     await apiClient.LoginAsync(credentials, CancellationToken.None);
                     _workshopOptions = await apiClient.GetWorkshopsAsync(CancellationToken.None);
+                    currentFactory = await apiClient.GetCurrentFactoryAsync(CancellationToken.None);
                 }
 
-                _availableWorkshops.Items.Clear();
-                _selectedWorkshops.Items.Clear();
-                foreach (WorkshopOption option in _workshopOptions
-                    .Where(x => x != null)
-                    .OrderBy(x => x.WorkshopId)
-                    .ThenBy(x => x.WorkshopName))
-                {
-                    bool selected = selectedIds.Contains(option.WorkshopId)
-                        || (!string.IsNullOrWhiteSpace(option.WorkshopName) && selectedNames.Contains(option.WorkshopName.Trim()));
-                    (selected ? _selectedWorkshops : _availableWorkshops).Items.Add(option);
-                }
-
-                UpdateWorkshopControls();
+                BindFactoryOptions(currentFactory);
+                BindWorkshopLists(selectedIds, selectedNames);
                 MessageBox.Show($"已加载 {_workshopOptions.Count} 个车间。", "刷新成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -375,6 +414,109 @@ namespace AndonVoiceBroadcaster.Forms
                 string name = i < names.Count ? names[i] : string.Empty;
                 _selectedWorkshops.Items.Add(new WorkshopOption { WorkshopId = id, WorkshopName = name });
             }
+        }
+
+        private void BindSavedFactorySelection()
+        {
+            _bindingFactory = true;
+            try
+            {
+                _factory.Items.Clear();
+                if (_settings.FactoryId.HasValue || !string.IsNullOrWhiteSpace(_settings.FactoryName))
+                {
+                    _factory.Items.Add(new FactoryOption
+                    {
+                        FactoryId = _settings.FactoryId,
+                        FactoryName = _settings.FactoryName
+                    });
+                    _factory.SelectedIndex = 0;
+                }
+            }
+            finally
+            {
+                _bindingFactory = false;
+            }
+        }
+
+        private void BindFactoryOptions(FactoryOption currentFactory)
+        {
+            var factories = (_workshopOptions ?? new List<WorkshopOption>())
+                .Where(x => x != null && x.TenantId.HasValue)
+                .Select(x => x.TenantId.Value)
+                .Distinct()
+                .OrderBy(x => x)
+                .Select(id => new FactoryOption
+                {
+                    FactoryId = id,
+                    FactoryName = currentFactory != null && currentFactory.FactoryId == id
+                        ? currentFactory.FactoryName
+                        : "工厂 " + id
+                })
+                .ToList();
+            if (currentFactory != null && !factories.Any(x => x.FactoryId == currentFactory.FactoryId))
+            {
+                factories.Add(currentFactory);
+            }
+            if (factories.Count == 0)
+            {
+                factories.Add(currentFactory ?? new FactoryOption { FactoryName = "当前登录工厂" });
+            }
+            long? preferredId = _settings.FactoryId ?? (currentFactory == null ? null : currentFactory.FactoryId);
+            _bindingFactory = true;
+            try
+            {
+                _factory.Items.Clear();
+                foreach (FactoryOption factory in factories)
+                {
+                    _factory.Items.Add(factory);
+                }
+                int selectedIndex = preferredId.HasValue
+                    ? factories.FindIndex(x => x.FactoryId == preferredId)
+                    : 0;
+                _factory.SelectedIndex = selectedIndex >= 0 ? selectedIndex : 0;
+            }
+            finally
+            {
+                _bindingFactory = false;
+            }
+        }
+
+        private void FactoryOnSelectedIndexChanged(object sender, EventArgs eventArgs)
+        {
+            if (_bindingFactory || _workshopOptions == null)
+            {
+                return;
+            }
+            var selectedIds = _selectedWorkshops.Items.OfType<WorkshopOption>()
+                .Where(x => x.WorkshopId >= 0)
+                .Select(x => x.WorkshopId)
+                .ToHashSet();
+            var selectedNames = _selectedWorkshops.Items.OfType<WorkshopOption>()
+                .Where(x => !string.IsNullOrWhiteSpace(x.WorkshopName))
+                .Select(x => x.WorkshopName.Trim())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            BindWorkshopLists(selectedIds, selectedNames);
+        }
+
+        private void BindWorkshopLists(HashSet<long> selectedIds, HashSet<string> selectedNames)
+        {
+            FactoryOption selectedFactory = _factory.SelectedItem as FactoryOption;
+            bool hasFactoryData = (_workshopOptions ?? new List<WorkshopOption>()).Any(x => x != null && x.TenantId.HasValue);
+            IEnumerable<WorkshopOption> candidates = (_workshopOptions ?? new List<WorkshopOption>()).Where(x => x != null);
+            if (hasFactoryData && selectedFactory != null && selectedFactory.FactoryId.HasValue)
+            {
+                candidates = candidates.Where(x => x.TenantId == selectedFactory.FactoryId);
+            }
+
+            _availableWorkshops.Items.Clear();
+            _selectedWorkshops.Items.Clear();
+            foreach (WorkshopOption option in candidates.OrderBy(x => x.WorkshopId).ThenBy(x => x.WorkshopName))
+            {
+                bool selected = selectedIds.Contains(option.WorkshopId)
+                    || (!string.IsNullOrWhiteSpace(option.WorkshopName) && selectedNames.Contains(option.WorkshopName.Trim()));
+                (selected ? _selectedWorkshops : _availableWorkshops).Items.Add(option);
+            }
+            UpdateWorkshopControls();
         }
 
         private void WorkshopSelectionChanged(object sender, EventArgs eventArgs)

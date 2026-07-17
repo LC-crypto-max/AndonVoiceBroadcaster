@@ -4,6 +4,8 @@ namespace AndonVoiceBroadcaster.Models
     {
         public long WorkshopId { get; set; }
         public string WorkshopName { get; set; }
+        // 当前 MES 以 tenantId 区分工厂/租户范围。
+        public long? TenantId { get; set; }
 
         public override string ToString()
         {
