@@ -1,138 +1,133 @@
 # AndonVoiceBroadcaster
 
-这是 MES 安灯语音播报的 WinForms 客户端，目标框架为 .NET Framework 4.8。客户端适合车间固定电脑常驻运行：从现有 `sys_voice_broadcast` 查询任务，播放提示音和 Windows 中文语音，并通过现有 MES 接口更新播报次数和完成状态。
+AndonVoiceBroadcaster 是运行在车间固定 Windows 电脑上的 MES 安灯语音播报客户端，目标框架为 **.NET Framework 4.8**。程序从 MES 查询待播报任务，通过电脑连接的喇叭播放提示音和中文语音，并回写播报次数及完成状态。
 
-## 功能特性
+当前版本面向“一台车间 Windows 电脑控制一套喇叭”的使用场景，已具备完整演示所需的工厂、车间和工作时间配置能力。
+
+## 当前实现情况（2026-07-18）
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
-| 音量调节 | ✅ | 通过 TTS 音量设置项实现，范围 0-100 |
-| 语速调节 | ✅ | 通过 TTS 语速设置项实现，范围 -10 到 10 |
-| 播放暂停 | ✅ | 通过托盘菜单和主界面按钮实现 |
-| 数据同步 | ✅ | 播放完成后回写 MES 系统 |
-| 车间筛选 | ✅ | 通过双列表选择器选择车间 |
-| 日志记录 | ✅ | 配置持久化，下次启动自动加载 |
-| 开机启动 | ✅ | 当前用户登录后自动启动 |
-| 安全退出 | ✅ | 后台进程自动关闭，不产生残留 |
-| 无感知启动 | ✅ | 启动后最小化到系统托盘 |
-| 异常重试 | ✅ | 连续失败达到上限后暂停，可手动恢复 |
-| 本地测试 | ✅ | 不依赖 MES 配置，可直接测试语音 |
+| MES 登录与任务轮询 | 已实现 | 使用专用账号登录并轮询待播报任务 |
+| 工厂选择 | 已实现 | 以 MES `tenantId` 作为工厂标识，显示当前登录工厂 |
+| 车间选择 | 已实现 | 按工厂筛选车间，通过双列表添加、移除、全选和清空 |
+| 工作时间 | 已实现 | 默认每天 08:00-17:00 查询和播报，可在设置中修改 |
+| 中文语音播报 | 已实现 | 使用 Windows 中文 TTS，可配置语速、音量和测试文本 |
+| 提示音 | 已实现 | 播报前播放 `audio/AlarmMusic.wav` |
+| MES 状态回写 | 已实现 | 更新播报次数，达到次数后回写完成状态 |
+| 暂停与继续 | 已实现 | 主界面和托盘菜单均可控制 |
+| 异常重试 | 已实现 | 连续失败达到上限后暂停，排障后可继续 |
+| 配置持久化 | 已实现 | 普通设置保存为 JSON，密码使用当前 Windows 用户 DPAPI 加密 |
+| 开机启动与托盘运行 | 已实现 | 可配置登录后启动及启动后最小化 |
+| 日志与安全退出 | 已实现 | 写入本地日志，退出时释放后台任务和音频资源 |
+| 本地声音测试 | 已实现 | 无需 MES 连接即可测试提示音和中文语音 |
 
-## 第一天本地语音验证
+## 快速体验
 
-当前阶段不需要安装 MySQL，也不需要先配置 MES。直接启动程序，点击"测试中文语音"，程序会朗读配置文件中的 `TestSpeechText`；默认内容为"这是一条安灯语音播报测试，语音功能正常。"。可在"系统设置"的"本地测试文本"中修改内容。点击"测试提示音"可单独验证 `audio/AlarmMusic.wav`。
+1. 使用 Visual Studio 2022 打开 `AndonVoiceBroadcaster.csproj`，或执行：
 
-本地语音与 MES 轮询已经解耦：MES 地址、账号密码为空时，界面显示"本地播报测试就绪（MES 未配置）"，仍可测试声音。开发机默认不开机启动、不自动最小化，便于第一天人工验收。
+   ```powershell
+   dotnet msbuild .\AndonVoiceBroadcaster.csproj -t:Rebuild -p:Configuration=Debug -p:Platform=AnyCPU
+   ```
 
-2026-07-15 已在当前 Windows 用户会话使用 `Microsoft Huihui Desktop (zh-CN)` 完成实际中文朗读调用；Debug 版本也已通过 MSBuild 重新构建。
+2. 运行 `bin\Debug\AndonVoiceBroadcaster.exe`。
+3. 点击“测试提示音”检查喇叭，点击“测试中文语音”检查 Windows 中文语音。
+4. 打开“系统设置”，填写 MES 信息后刷新工厂和车间数据。
 
-## MES 联调配置
+MES 地址或账号尚未配置时，本地声音测试仍可使用。
 
-需要联调时，在"系统设置"中填写 MES 地址和账号密码。
+## 工厂、车间和工作时间配置
 
-### 车间选择
+在“系统设置”中按以下顺序配置：
 
-车间选择已从手动输入改为可视化双列表选择器：
+1. 填写 MES 服务地址、登录账号、密码和终端编号。
+2. 点击“刷新列表”，程序登录 MES 并读取当前工厂和车间。
+3. 在“工厂”下拉框中确认工厂。当前 MES 接口只返回登录账号所属租户时，下拉框显示该工厂；车间数据包含多个 `tenantId` 时，可按工厂切换筛选。
+4. 从左侧“可用车间”选择车间，使用中间按钮添加到右侧“已选车间”；也可双击列表项快速移动。
+5. 设置上班开始时间和下班停止时间，默认分别为 08:00 和 17:00。
+6. 保存设置并回到主界面，确认状态栏显示的工厂、车间和工作时间正确。
 
-1. 填写完整的 MES 服务地址、账号和密码
-2. 点击"刷新车间列表"按钮加载车间数据
-3. 在左侧"可用车间"列表中选择车间，点击"添加 ->"移到右侧"已选车间"列表
-4. 使用"全部添加"快速添加所有车间，使用"全部移除"清空已选列表
-5. 在右侧"已选车间"列表中选择车间，点击"<- 移除"移回左侧
-6. 未选择任何车间时，默认播报全部车间
+工作时间采用本机时间，开始时刻包含、结束时刻不包含，即默认有效区间为 `[08:00, 17:00)`。非工作时间程序保持运行但不发起任务轮询；本地提示音和语音测试不受此限制。
 
-车间显示格式为 `车间ID - 车间名称`，便于用户识别。
-
-### 登录配置
-
-默认登录地址为 `/loginWithNoCode`，可在 `config/appsettings.json` 的 `LoginEndpoint` 修改为 `/login`。无验证码登录只建议用于受控的本地测试，并应使用最小权限的专用账号；不要在源码或文档中保存管理员密码。
-
-账号密码保存在当前 Windows 用户 DPAPI 加密文件 `data/credentials.dat`，不写入明文配置。`audio/AlarmMusic.wav` 与生成的 EXE 一起部署。
-
-### 异常重试
-
-MES 登录或接口请求连续失败达到 `MaxRequestRetryCount`（默认 3 次）后，客户端会停止自动请求并进入暂停状态；排除故障后点击"继续播报"会清零失败计数并重新连接。
-
-## 设置界面说明
-
-设置界面包含以下配置项：
+## 设置项
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| MES 服务地址 | MES 系统的访问地址 | - |
-| 登录账号 | MES 登录账号 | - |
-| 登录密码 | MES 登录密码 | - |
-| 终端编号 | 当前终端的唯一标识 | - |
-| 选择车间 | 通过双列表选择器选择要播报的车间 | 全部车间 |
-| 查询间隔（秒） | MES 任务轮询间隔 | 2 |
-| 网络重试（秒） | 请求失败后的重试间隔 | 5 |
-| TTS 语速 | 中文语音的语速 | 0 |
-| TTS 音量 | 中文语音的音量 | 100 |
-| 本地测试文本 | 用于测试中文语音的文本 | 这是一条安灯语音播报测试，语音功能正常。 |
-| 播报间隔（秒） | 同一任务多次播报之间的间隔 | 1 |
-| 当前 Windows 用户登录后自动启动 | 开机后自动启动程序 | 否 |
-| 启动后最小化到系统托盘 | 启动后自动最小化 | 否 |
+| MES 服务地址 | MES 系统访问地址 | 空 |
+| 登录账号、密码 | MES 专用账号凭据 | 空 |
+| 终端编号 | 当前电脑的业务标识 | 空 |
+| 工厂 | MES 租户/工厂范围 | 当前登录工厂 |
+| 车间 | 双列表选择要播报的车间 | 未选择时为全部可用车间 |
+| 上班开始时间 | 开始轮询和播报的本地时间 | 08:00 |
+| 下班停止时间 | 停止新任务轮询和播报的本地时间 | 17:00 |
+| 查询间隔 | MES 任务轮询间隔 | 2 秒 |
+| 网络重试 | 请求失败后的重试间隔 | 5 秒 |
+| 最大连续失败次数 | 达到后自动暂停 | 3 次 |
+| TTS 语速 | Windows 中文语音语速 | 0 |
+| TTS 音量 | Windows 中文语音音量 | 100 |
+| 播报间隔 | 同一任务多次播报之间的间隔 | 1 秒 |
+| 开机启动 | 当前 Windows 用户登录后启动 | 否 |
+| 启动后最小化 | 启动后进入系统托盘 | 否 |
 
-## 构建与运行
+## MES 接口与运行约束
 
-使用 Visual Studio 2022 打开 `AndonVoiceBroadcaster.csproj`，选择 .NET Framework 4.8、Debug/Release 和 Any CPU 构建；也可执行 `dotnet msbuild AndonVoiceBroadcaster.csproj -t:Rebuild -p:Configuration=Debug`。启动后关闭主窗口会最小化到托盘；通过托盘"退出程序"并确认后才会停止播报。安全退出会取消当前任务，最多等待协调器 5 秒，随后释放 HTTP、TTS、提示音和托盘资源并结束消息循环。
+- 默认登录地址为 `/loginWithNoCode`，可通过 `config/appsettings.json` 的 `LoginEndpoint` 调整。
+- 工厂标识来自登录租户及车间数据中的 `tenantId`；车间显示格式为 `车间ID - 车间名称`。
+- 未达到播报次数时调用 `POST /system/voiceBroadcast/addBroadcastedNum`；达到次数后调用 `POST /system/voiceBroadcast/broadcastCompleted`。
+- 登录账号需具有登录、租户/车间查询、播报任务查询和结果回写权限。
+- 同一批任务应只由一台播报终端消费，避免与 PDA 播报页面重复播放。
+- 正式账号应遵循最小权限原则，不要在源码、README 或部署说明中记录真实密码。
 
-## 后端前置条件
+## 构建部署包
 
-- 客户端沿用现有 PDA 接口：未达到次数时调用 `POST /system/voiceBroadcast/addBroadcastedNum`，达到次数时调用 `POST /system/voiceBroadcast/broadcastCompleted`。
-- 同一批任务只应由一台车间播报终端消费，避免 PDA 页面与 WinForms 客户端重复播放。
-- 登录账号需要车间列表查询权限，以及语音播报查询/确认权限。
-- 正式车间电脑不建议与 PDA `voicebroadcast` 页面同时消费同一批任务。
+开发机需安装 Visual Studio 2022 Build Tools（含 .NET Framework 4.8 开发工具包）或等效 MSBuild 环境。执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build-deploy.ps1
+```
+
+脚本会执行 Release 构建、校验交付文件，并在项目根目录生成 `AndonVoiceBroadcaster_Deploy.zip`。操作员解压后先运行 `安装检查.bat`，全部关键项通过后再运行 `启动程序.bat`。
+
+目标电脑建议使用 Windows 10/11，并需要：
+
+- .NET Framework 4.8 或更高版本；
+- Windows 中文语音组件；
+- 可用的扬声器/功放及正确的默认音频输出设备；
+- 到 MES 服务地址的网络访问能力；
+- 对程序目录的读写权限（用于保存配置、加密凭据和日志）。
+
+详细操作见 `deploy/部署说明.txt`。
 
 ## 项目结构
 
-```
+```text
 AndonVoiceBroadcaster/
-├── Forms/                    # WinForms 窗体
-│   ├── MainForm.cs           # 主窗体
-│   └── SettingsForm.cs       # 设置窗体
-├── Infrastructure/           # 基础设施
-│   ├── DpapiSecretStore.cs   # DPAPI 加密存储
-│   ├── FileLogger.cs         # 文件日志
-│   └── SingleInstanceGuard.cs # 单实例保护
-├── Models/                   # 数据模型
-│   ├── AppSettings.cs        # 应用设置
-│   ├── MesCredentials.cs     # MES 凭据
-│   ├── VoiceBroadcastTask.cs # 语音播报任务
-│   └── WorkshopOption.cs     # 车间选项
-├── Services/                 # 业务服务
-│   ├── BroadcastCoordinator.cs # 播报协调器
-│   ├── MesApiClient.cs       # MES API 客户端
-│   ├── SettingsService.cs    # 设置服务
-│   ├── SoundService.cs       # 提示音服务
-│   ├── SpeechService.cs      # TTS 语音服务
-│   └── StartupService.cs     # 启动服务
-├── audio/                    # 音频文件
-│   └── AlarmMusic.wav        # 提示音
-├── config/                   # 配置文件
-│   └── appsettings.json      # 默认配置
-├── docs/                     # 文档
-│   ├── 技术设计文档7.17.md
-│   ├── 当前设计方案与核心理念.md
-│   ├── 第2工作日问题与解决方案.md
-│   ├── 第3工作日问题与解决方案.md
-│   ├── 技术设计文档达成内容确认.md
-│   └── 2026-07-16暂停换车间与退出问题复盘.md
-├── AndonVoiceBroadcaster.csproj
-├── Program.cs
-└── README.md
+├── Forms/                         # 主界面和设置界面
+├── Infrastructure/                # 日志、DPAPI、单实例保护
+├── Models/
+│   ├── AppSettings.cs             # 应用设置及工作时间逻辑
+│   ├── FactoryOption.cs           # 工厂选项
+│   ├── WorkshopOption.cs          # 车间选项
+│   └── VoiceBroadcastTask.cs      # 播报任务
+├── Services/                      # MES、播报、语音、提示音和启动服务
+├── audio/AlarmMusic.wav           # 默认提示音
+├── config/appsettings.json        # 默认配置
+├── deploy/                        # 操作员部署材料和脚本
+├── docs/                          # 内部定制设计和复盘文档（Git 忽略）
+├── build-deploy.ps1               # Release 构建及打包脚本
+└── AndonVoiceBroadcaster.csproj
 ```
 
-## 问题与解决方案
+## 内部文档
 
-项目开发过程中的问题与解决方案记录在 docs 文件夹中：
+`docs/` 包含定制业务设计、数据流、实施计划和工作日复盘，已按项目保密要求加入 `.gitignore`，不会随 GitHub 仓库提交。当前本地文档包括：
 
-- [第2工作日问题与解决方案](docs/第2工作日问题与解决方案.md)
-- [第3工作日问题与解决方案](docs/第3工作日问题与解决方案.md)
-- [2026-07-16暂停换车间与退出问题复盘](docs/2026-07-16暂停换车间与退出问题复盘.md)
+- `docs/技术设计文档7.18实现情况.md`
+- `docs/第4工作日问题与解决方案.md`
+- `docs/数据流.md`
+- `docs/技术设计文档7.17.md`
+- `docs/未实现功能与实施计划.md`
 
-## 技术设计文档
+## 退出与排障
 
-- [技术设计文档](docs/技术设计文档7.17.md)
-- [当前设计方案与核心理念](docs/当前设计方案与核心理念.md)
-- [技术设计文档达成内容确认](docs/技术设计文档达成内容确认.md)
+关闭主窗口只会最小化到系统托盘。需要完全退出时，请右键托盘图标并选择“退出程序”。发生连接或播报异常时，先查看程序状态和 `logs/` 下的日志，再按 `deploy/部署说明.txt` 的检查顺序处理。

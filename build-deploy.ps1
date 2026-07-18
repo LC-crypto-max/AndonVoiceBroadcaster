@@ -22,11 +22,37 @@ try {
     New-Item -ItemType Directory -Force -Path "$deployDir\audio", "$deployDir\config" | Out-Null
     Write-Host "Directories created" -ForegroundColor Green
 
-    Write-Host "3. Copy files..." -ForegroundColor Yellow
+    Write-Host "3. Validate and copy files..." -ForegroundColor Yellow
+    $requiredSourceFiles = @(
+        "$projectDir\bin\Release\AndonVoiceBroadcaster.exe",
+        "$projectDir\config\appsettings.json",
+        "$projectDir\audio\AlarmMusic.wav"
+    )
+    foreach ($requiredFile in $requiredSourceFiles) {
+        if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+            throw "Required deployment file is missing: $requiredFile"
+        }
+    }
+
+    $batchFiles = @(Get-ChildItem -LiteralPath $deployDir -Filter "*.bat" -File)
+    $instructionFiles = @(Get-ChildItem -LiteralPath $deployDir -Filter "*.txt" -File)
+    if ($batchFiles.Count -lt 2) {
+        throw "At least two deployment batch files are required in: $deployDir"
+    }
+    if ($instructionFiles.Count -lt 1) {
+        throw "A deployment instruction text file is required in: $deployDir"
+    }
+
+    try {
+        Get-Content -Raw -Encoding UTF8 -LiteralPath "$projectDir\config\appsettings.json" | ConvertFrom-Json | Out-Null
+    } catch {
+        throw "config/appsettings.json is not valid JSON: $_"
+    }
+
     Copy-Item -Path "$projectDir\bin\Release\AndonVoiceBroadcaster.exe" -Destination $deployDir -Force
     Copy-Item -Path "$projectDir\config\appsettings.json" -Destination "$deployDir\config" -Force
     Copy-Item -Path "$projectDir\audio\AlarmMusic.wav" -Destination "$deployDir\audio" -Force
-    Write-Host "Files copied" -ForegroundColor Green
+    Write-Host "Deployment files validated and copied" -ForegroundColor Green
 
     Write-Host "4. Create zip package..." -ForegroundColor Yellow
     if (Test-Path $zipPath) {

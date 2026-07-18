@@ -136,7 +136,7 @@ namespace AndonVoiceBroadcaster.Forms
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents = false,
-                Padding = new Padding(8, 0, 8, 0)
+                Padding = new Padding(8, 4, 8, 0)
             };
             _addWorkshopButton = new Button { Text = "添加 >", Width = 90, Height = 22, Margin = new Padding(0) };
             _addWorkshopButton.Click += AddWorkshopButtonOnClick;
