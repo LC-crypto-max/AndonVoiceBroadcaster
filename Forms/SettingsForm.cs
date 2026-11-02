@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
@@ -10,256 +10,25 @@ using AndonVoiceBroadcaster.Services;
 
 namespace AndonVoiceBroadcaster.Forms
 {
-    public sealed class SettingsForm : Form
+    public partial class SettingsForm : Form
     {
         private readonly SettingsService _settingsService;
         private readonly AppSettings _settings;
         private readonly MesCredentials _credentials;
-        private TextBox _mesBaseUrl;
-        private TextBox _username;
-        private TextBox _password;
-        private TextBox _terminalCode;
-        private ComboBox _factory;
-        private ListBox _availableWorkshops;
-        private ListBox _selectedWorkshops;
-        private Button _refreshWorkshopButton;
-        private Button _addWorkshopButton;
-        private Button _removeWorkshopButton;
-        private Button _addAllButton;
-        private Button _removeAllButton;
-        private Label _availableWorkshopCount;
-        private Label _selectedWorkshopCount;
         private List<WorkshopOption> _workshopOptions;
         private bool _bindingFactory;
-        private NumericUpDown _pollSeconds;
-        private NumericUpDown _retrySeconds;
-        private NumericUpDown _ttsRate;
-        private NumericUpDown _ttsVolume;
-        private TextBox _testSpeechText;
-        private NumericUpDown _broadcastInterval;
-        private DateTimePicker _workStartTime;
-        private DateTimePicker _workEndTime;
-        private CheckBox _startWithWindows;
-        private CheckBox _startMinimized;
 
-        public SettingsForm(SettingsService settingsService, AppSettings settings, MesCredentials credentials)
+        public SettingsForm()
+        {
+            InitializeComponent();
+        }
+
+        public SettingsForm(SettingsService settingsService, AppSettings settings, MesCredentials credentials) : this()
         {
             _settingsService = settingsService;
             _settings = settings;
             _credentials = credentials;
-            InitializeComponent();
             BindValues();
-        }
-
-        private void InitializeComponent()
-        {
-            Text = "安灯语音播报 - 系统设置";
-            StartPosition = FormStartPosition.CenterParent;
-            FormBorderStyle = FormBorderStyle.Sizable;
-            MaximizeBox = true;
-            MinimizeBox = false;
-            ClientSize = new Size(900, 700);
-            MinimumSize = new Size(820, 680);
-
-            var panel = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                Padding = new Padding(16),
-                ColumnCount = 2,
-                RowCount = 8,
-                AutoSize = false
-            };
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (int row = 0; row <= 3; row++)
-            {
-                panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            }
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-
-            _mesBaseUrl = AddTextBox(panel, "MES 服务地址", 0);
-            _username = AddTextBox(panel, "登录账号", 1);
-            _password = AddTextBox(panel, "登录密码", 2);
-            _password.UseSystemPasswordChar = true;
-            _terminalCode = AddTextBox(panel, "终端编号", 3);
-
-            var workshopGroup = new GroupBox
-            {
-                Text = "车间播报范围（未选择时默认播报全部车间）",
-                Dock = DockStyle.Fill,
-                Padding = new Padding(10),
-                Margin = new Padding(3, 8, 3, 8)
-            };
-            var workshopTable = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 3,
-                RowCount = 4,
-                AutoSize = false
-            };
-            workshopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            workshopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
-            workshopTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            workshopTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            workshopTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-            workshopTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            workshopTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-
-            var factoryPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
-            factoryPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
-            factoryPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            factoryPanel.Controls.Add(new Label { Text = "选择工厂", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
-            _factory = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 3, 0, 3) };
-            _factory.SelectedIndexChanged += FactoryOnSelectedIndexChanged;
-            factoryPanel.Controls.Add(_factory, 1, 0);
-            workshopTable.Controls.Add(factoryPanel, 0, 0);
-            workshopTable.SetColumnSpan(factoryPanel, 3);
-
-            workshopTable.Controls.Add(new Label { Text = "可用车间", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
-            workshopTable.Controls.Add(new Label { Text = "已选车间", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 2, 1);
-
-            _availableWorkshops = CreateWorkshopListBox();
-            _availableWorkshops.DoubleClick += AddWorkshopButtonOnClick;
-            _availableWorkshops.SelectedIndexChanged += WorkshopSelectionChanged;
-            workshopTable.Controls.Add(_availableWorkshops, 0, 2);
-
-            _selectedWorkshops = CreateWorkshopListBox();
-            _selectedWorkshops.DoubleClick += RemoveWorkshopButtonOnClick;
-            _selectedWorkshops.SelectedIndexChanged += WorkshopSelectionChanged;
-            workshopTable.Controls.Add(_selectedWorkshops, 2, 2);
-
-            var buttonPanel = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = false,
-                Padding = new Padding(8, 4, 8, 0)
-            };
-            _addWorkshopButton = new Button { Text = "添加 >", Width = 90, Height = 22, Margin = new Padding(0) };
-            _addWorkshopButton.Click += AddWorkshopButtonOnClick;
-            _removeWorkshopButton = new Button { Text = "< 移除", Width = 90, Height = 22, Margin = new Padding(0) };
-            _removeWorkshopButton.Click += RemoveWorkshopButtonOnClick;
-            _addAllButton = new Button { Text = "全部 >>", Width = 90, Height = 22, Margin = new Padding(0) };
-            _addAllButton.Click += AddAllButtonOnClick;
-            _removeAllButton = new Button { Text = "<< 清空", Width = 90, Height = 22, Margin = new Padding(0) };
-            _removeAllButton.Click += RemoveAllButtonOnClick;
-            buttonPanel.Controls.Add(_addWorkshopButton);
-            buttonPanel.Controls.Add(_removeWorkshopButton);
-            buttonPanel.Controls.Add(_addAllButton);
-            buttonPanel.Controls.Add(_removeAllButton);
-            workshopTable.Controls.Add(buttonPanel, 1, 1);
-            workshopTable.SetRowSpan(buttonPanel, 2);
-
-            _availableWorkshopCount = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
-            _selectedWorkshopCount = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
-            _refreshWorkshopButton = new Button { Text = "刷新列表", Dock = DockStyle.Fill, Margin = new Padding(8, 3, 8, 3) };
-            _refreshWorkshopButton.Click += RefreshWorkshopButtonOnClick;
-            workshopTable.Controls.Add(_availableWorkshopCount, 0, 3);
-            workshopTable.Controls.Add(_refreshWorkshopButton, 1, 3);
-            workshopTable.Controls.Add(_selectedWorkshopCount, 2, 3);
-
-            workshopGroup.Controls.Add(workshopTable);
-            panel.Controls.Add(workshopGroup, 0, 4);
-            panel.SetColumnSpan(workshopGroup, 2);
-
-            var parameterGroup = new GroupBox
-            {
-                Text = "轮询与播报参数",
-                Dock = DockStyle.Fill,
-                Padding = new Padding(10),
-                Margin = new Padding(3, 0, 3, 8)
-            };
-            var parameterTable = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 4,
-                RowCount = 4
-            };
-            parameterTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
-            parameterTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            parameterTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
-            parameterTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            for (int row = 0; row < 4; row++)
-            {
-                parameterTable.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
-            }
-            _pollSeconds = AddNumber(parameterTable, "查询间隔（秒）", 0, 1, 30, 2, 0);
-            _retrySeconds = AddNumber(parameterTable, "网络重试（秒）", 0, 1, 300, 5, 2);
-            _ttsRate = AddNumber(parameterTable, "TTS 语速", 1, -10, 10, 0, 0);
-            _ttsVolume = AddNumber(parameterTable, "TTS 音量", 1, 0, 100, 100, 2);
-            _testSpeechText = AddTextBox(parameterTable, "本地测试文本", 2, 0);
-            _broadcastInterval = AddNumber(parameterTable, "播报间隔（秒）", 2, 0, 60, 1, 2);
-            _workStartTime = AddTimePicker(parameterTable, "上班开始时间", 3, 0);
-            _workEndTime = AddTimePicker(parameterTable, "下班停止时间", 3, 2);
-            parameterGroup.Controls.Add(parameterTable);
-            panel.Controls.Add(parameterGroup, 0, 5);
-            panel.SetColumnSpan(parameterGroup, 2);
-
-            _startWithWindows = new CheckBox { Text = "当前 Windows 用户登录后自动启动", AutoSize = true, Anchor = AnchorStyles.Left };
-            _startMinimized = new CheckBox { Text = "启动后最小化到系统托盘", AutoSize = true, Anchor = AnchorStyles.Left };
-            panel.Controls.Add(new Label { Text = "启动选项", TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill }, 0, 6);
-            var options = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, AutoSize = true };
-            options.Controls.Add(_startWithWindows);
-            options.Controls.Add(_startMinimized);
-            panel.Controls.Add(options, 1, 6);
-
-            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
-            var saveButton = new Button { Text = "保存", Width = 88, DialogResult = DialogResult.None };
-            saveButton.Click += SaveButtonOnClick;
-            var cancelButton = new Button { Text = "取消", Width = 88, DialogResult = DialogResult.Cancel };
-            buttons.Controls.Add(saveButton);
-            buttons.Controls.Add(cancelButton);
-            panel.Controls.Add(new Label(), 0, 7);
-            panel.Controls.Add(buttons, 1, 7);
-            Controls.Add(panel);
-            AcceptButton = saveButton;
-            CancelButton = cancelButton;
-        }
-
-        private static ListBox CreateWorkshopListBox()
-        {
-            return new ListBox
-            {
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 2, 0, 2),
-                SelectionMode = SelectionMode.MultiExtended,
-                HorizontalScrollbar = true,
-                IntegralHeight = false
-            };
-        }
-
-        private static TextBox AddTextBox(TableLayoutPanel panel, string label, int row, int labelColumn = 0)
-        {
-            panel.Controls.Add(new Label { Text = label, TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill }, labelColumn, row);
-            var textBox = new TextBox { Dock = DockStyle.Fill, Margin = new Padding(3, 5, 3, 5) };
-            panel.Controls.Add(textBox, labelColumn + 1, row);
-            return textBox;
-        }
-
-        private static NumericUpDown AddNumber(TableLayoutPanel panel, string label, int row, decimal minimum, decimal maximum, decimal value, int labelColumn = 0)
-        {
-            panel.Controls.Add(new Label { Text = label, TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill }, labelColumn, row);
-            var number = new NumericUpDown { Dock = DockStyle.Fill, Minimum = minimum, Maximum = maximum, Value = value, Margin = new Padding(3, 5, 3, 5) };
-            panel.Controls.Add(number, labelColumn + 1, row);
-            return number;
-        }
-
-        private static DateTimePicker AddTimePicker(TableLayoutPanel panel, string label, int row, int labelColumn)
-        {
-            panel.Controls.Add(new Label { Text = label, TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill }, labelColumn, row);
-            var picker = new DateTimePicker
-            {
-                Dock = DockStyle.Fill,
-                Format = DateTimePickerFormat.Custom,
-                CustomFormat = "HH:mm",
-                ShowUpDown = true,
-                Margin = new Padding(3, 5, 3, 5)
-            };
-            panel.Controls.Add(picker, labelColumn + 1, row);
-            return picker;
         }
 
         private void BindValues()

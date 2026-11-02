@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows.Forms;
 using AndonVoiceBroadcaster.Infrastructure;
 
@@ -21,7 +21,7 @@ namespace AndonVoiceBroadcaster
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 // 初始化 WinForms 并进入主界面消息循环。
-                Application.Run(new Forms.MainForm());
+                Application.Run(new Forms.Form1());
             }
         }
     }

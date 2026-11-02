@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -13,7 +13,7 @@ using AndonVoiceBroadcaster.Services;
 
 namespace AndonVoiceBroadcaster.Forms
 {
-    public sealed class MainForm : Form
+    public partial class Form1 : Form
     {
         private readonly string _applicationDirectory = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
         private SettingsService _settingsService;
@@ -24,96 +24,21 @@ namespace AndonVoiceBroadcaster.Forms
         private SpeechService _speechService;
         private SoundService _soundService;
         private BroadcastCoordinator _coordinator;
-        private NotifyIcon _notifyIcon;
-        private Label _statusValue;
-        private Label _terminalValue;
-        private Label _workshopValue;
-        private Label _currentTaskValue;
-        private Button _pauseButton;
-        private ListView _taskList;
-        private TextBox _logTextBox;
         private bool _allowExit;
         private bool _shutdownStarted;
         private bool _shutdownCompleted;
         private int _exitWatchdogStarted;
 
-        public MainForm()
+        public Form1()
         {
             InitializeComponent();
-            Load += MainFormOnLoad;
-            FormClosing += MainFormOnClosing;
-        }
-
-        private void InitializeComponent()
-        {
-            Text = "MES 安灯语音播报";
-            StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(880, 580);
-            Size = new Size(1020, 690);
-
-            var topPanel = new TableLayoutPanel { Dock = DockStyle.Top, Height = 115, ColumnCount = 4, RowCount = 2, Padding = new Padding(12) };
-            topPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 105));
-            topPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
-            topPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 105));
-            topPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
-            _statusValue = AddStatusField(topPanel, "运行状态", 0, 0);
-            _terminalValue = AddStatusField(topPanel, "终端编号", 2, 0);
-            _workshopValue = AddStatusField(topPanel, "工厂 / 车间", 0, 1);
-            _currentTaskValue = AddStatusField(topPanel, "当前任务", 2, 1);
-
-            var buttonPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(12, 4, 12, 4) };
-            _pauseButton = new Button { Text = "暂停播报", Width = 100 };
-            _pauseButton.Click += PauseButtonOnClick;
-            var testSoundButton = new Button { Text = "测试提示音", Width = 100 };
-            testSoundButton.Click += async (sender, args) => await RunTestAsync(false);
-            var testSpeechButton = new Button { Text = "测试中文语音", Width = 115 };
-            testSpeechButton.Click += async (sender, args) => await RunTestAsync(true);
-            var settingsButton = new Button { Text = "系统设置", Width = 100 };
-            settingsButton.Click += async (sender, args) => await OpenSettingsAsync();
-            buttonPanel.Controls.Add(_pauseButton);
-            buttonPanel.Controls.Add(testSoundButton);
-            buttonPanel.Controls.Add(testSpeechButton);
-            buttonPanel.Controls.Add(settingsButton);
-
-            _taskList = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true };
-            _taskList.Columns.Add("任务 ID", 90);
-            _taskList.Columns.Add("来源", 80);
-            _taskList.Columns.Add("产线/工位", 180);
-            _taskList.Columns.Add("播报内容", 400);
-            _taskList.Columns.Add("次数", 80);
-            _taskList.Columns.Add("状态", 90);
-
-            _logTextBox = new TextBox { Dock = DockStyle.Bottom, Height = 160, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Font = new Font(FontFamily.GenericMonospace, 9) };
-            var taskCaption = new Label { Text = "待播报任务（按创建时间 FIFO）", Dock = DockStyle.Top, Height = 26, Padding = new Padding(12, 6, 0, 0) };
-            Controls.Add(_taskList);
-            Controls.Add(taskCaption);
-            Controls.Add(_logTextBox);
-            Controls.Add(buttonPanel);
-            Controls.Add(topPanel);
-
-            var menu = new ContextMenuStrip();
-            menu.Items.Add("打开主窗口", null, (sender, args) => RestoreWindow());
-            menu.Items.Add("开始/暂停播报", null, (sender, args) => TogglePause());
-            menu.Items.Add("测试提示音", null, async (sender, args) => await RunTestAsync(false));
-            menu.Items.Add("测试中文语音", null, async (sender, args) => await RunTestAsync(true));
-            menu.Items.Add("系统设置", null, async (sender, args) => await OpenSettingsAsync());
-            menu.Items.Add("打开日志目录", null, (sender, args) => OpenLogDirectory());
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("退出程序", null, (sender, args) => ExitProgram());
-            _notifyIcon = new NotifyIcon { Text = "MES 安灯语音播报", Icon = SystemIcons.Information, ContextMenuStrip = menu, Visible = true };
-            _notifyIcon.DoubleClick += (sender, args) => RestoreWindow();
-        }
-
-        private static Label AddStatusField(TableLayoutPanel panel, string label, int labelColumn, int row)
-        {
-            panel.Controls.Add(new Label { Text = label + "：", TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill }, labelColumn, row);
-            var value = new Label { Text = "未初始化", TextAlign = ContentAlignment.MiddleLeft, Dock = DockStyle.Fill, AutoEllipsis = true };
-            panel.Controls.Add(value, labelColumn + 1, row);
-            return value;
         }
 
         private void MainFormOnLoad(object sender, EventArgs eventArgs)
         {
+            if (System.ComponentModel.LicenseManager.UsageMode == System.ComponentModel.LicenseUsageMode.Designtime || DesignMode) return;
+            _notifyIcon.Icon = SystemIcons.Information;
+            _notifyIcon.Visible = true;
             // 普通设置与 DPAPI 加密的 MES 凭据分开加载。
             _settingsService = new SettingsService(_applicationDirectory);
             _settings = _settingsService.LoadSettings();
@@ -383,6 +308,7 @@ namespace AndonVoiceBroadcaster.Forms
 
         private async void MainFormOnClosing(object sender, FormClosingEventArgs eventArgs)
         {
+            if (System.ComponentModel.LicenseManager.UsageMode == System.ComponentModel.LicenseUsageMode.Designtime || DesignMode) return;
             // 普通关闭只隐藏到托盘；明确退出时才停止播报。
             if (!_allowExit && eventArgs.CloseReason == CloseReason.UserClosing)
             {
@@ -570,6 +496,36 @@ namespace AndonVoiceBroadcaster.Forms
             StartExitWatchdog();
             _allowExit = true;
             Close();
+        }
+
+        private void RestoreWindowOnClick(object sender, EventArgs e)
+        {
+            RestoreWindow();
+        }
+
+        private async void TestSoundButtonOnClick(object sender, EventArgs e)
+        {
+            await RunTestAsync(false);
+        }
+
+        private async void TestSpeechButtonOnClick(object sender, EventArgs e)
+        {
+            await RunTestAsync(true);
+        }
+
+        private async void SettingsButtonOnClick(object sender, EventArgs e)
+        {
+            await OpenSettingsAsync();
+        }
+
+        private void OpenLogDirectoryOnClick(object sender, EventArgs e)
+        {
+            OpenLogDirectory();
+        }
+
+        private void ExitProgramOnClick(object sender, EventArgs e)
+        {
+            ExitProgram();
         }
     }
 }

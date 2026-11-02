@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -23,7 +23,19 @@ namespace AndonVoiceBroadcaster.Services
         // 每小时重试导写 1：在这里补充“手动暂停 / 故障等待”的状态、下次重试时间和固定 1 小时间隔。
         // 1. _paused 目前同时表示两种暂停，后续必须能区分原因；故障等待也应对外显示为已暂停。
         // 2. 暂停原因、重试时间和失败次数的关联更新要统一同步，避免 UI 操作与后台恢复互相覆盖。
+        private enum PauseReason
+        {
+            None,       // 正常运行
+            Manual,     // 用户手动暂停
+            Fault       // 网络故障等待
+        };
         private volatile bool _paused;
+        private PauseReason _pauseReason = PauseReason.None;
+        // 下次允许重试的时间
+        private DateTimeOffset? _nextRetryTime;
+
+        // 设定每小时重试一次
+        private static readonly TimeSpan FaultRetryInterval = TimeSpan.FromHours(1);
         private bool _workshopsResolved;
         private int _consecutiveFailureCount;
         private List<long> _resolvedWorkshopIds = new List<long>();

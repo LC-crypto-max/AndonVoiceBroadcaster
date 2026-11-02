@@ -4,6 +4,14 @@ AndonVoiceBroadcaster 是运行在车间固定 Windows 电脑上的 MES 安灯�
 
 当前版本面向“一台车间 Windows 电脑控制一套喇叭”的使用场景，已具备完整演示所需的工厂、车间和工作时间配置能力。
 
+## Visual Studio 可视化编辑
+
+打开 `AndonVoiceBroadcaster.sln`，在解决方案资源管理器中右键 `Forms/Form1.cs` → **查看设计器**（Shift+F7），即可编辑主窗口的按钮、控件和布局。`Forms/SettingsForm.cs` 同样支持设计器。
+
+选中按钮后，在属性窗口的闪电图标中配置 **Click**，或双击按钮进入对应事件方法。主窗口事件和业务逻辑写在 `Form1.cs`，设置窗口事件写在 `SettingsForm.cs`；布局由 Visual Studio 保存到各自的 `.Designer.cs` 和 `.resx` 中。
+
+信任配置属于本机 Visual Studio 用户设置：**工具 → 选项 → 环境 → 安全性 → 信任**。将项目所在文件夹加入受信任位置即可，无需关闭全局信任检查；移动项目或换电脑后需要重新添加路径。
+
 ## 当前实现情况（2026-07-18）
 
 | 功能 | 状态 | 说明 |
