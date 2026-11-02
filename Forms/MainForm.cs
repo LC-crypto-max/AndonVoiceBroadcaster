@@ -225,6 +225,9 @@ namespace AndonVoiceBroadcaster.Forms
 
         private void TogglePause()
         {
+            // 每小时重试导写 9：与协调器的新暂停状态保持一致，主窗口和托盘都从这里操作。
+            // 1. 故障等待期间点击“继续播报”，仍调用 Resume，让它取消等待并立即尝试 MES 请求。
+            // 2. 主动暂停调用 Pause，只能由用户继续解除；协调器的 IsPaused 需覆盖手动暂停与故障等待。
             if (_coordinator == null)
             {
                 return;
@@ -308,6 +311,9 @@ namespace AndonVoiceBroadcaster.Forms
 
         private void SetStatus(string status)
         {
+            // 每小时重试导写 10：复用现有状态栏和按钮，显示故障等待与自动恢复的结果。
+            // 1. 接收协调器发出的“故障等待，下次重试 HH:mm”状态；实际查询成功后再显示“运行中”。
+            // 2. 故障等待时按钮显示“继续播报”，自动恢复后显示“暂停播报”，保留现有 UI 线程切换方式。
             InvokeIfAvailable(() =>
             {
                 _statusValue.Text = status;

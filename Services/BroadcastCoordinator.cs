@@ -20,6 +20,9 @@ namespace AndonVoiceBroadcaster.Services
         private readonly object _syncRoot = new object();
         private CancellationTokenSource _cancellationTokenSource;
         private Task _runTask;
+        // 每小时重试导写 1：在这里补充“手动暂停 / 故障等待”的状态、下次重试时间和固定 1 小时间隔。
+        // 1. _paused 目前同时表示两种暂停，后续必须能区分原因；故障等待也应对外显示为已暂停。
+        // 2. 暂停原因、重试时间和失败次数的关联更新要统一同步，避免 UI 操作与后台恢复互相覆盖。
         private volatile bool _paused;
         private bool _workshopsResolved;
         private int _consecutiveFailureCount;
@@ -52,6 +55,9 @@ namespace AndonVoiceBroadcaster.Services
 
         public void Start()
         {
+            // 每小时重试导写 2：启动时初始化恢复状态；已有任务运行时，也要明确本次 Start 是否代表立即继续。
+            // 1. 开始新运行时清除旧的故障等待时间与失败计数，避免继承上次的一小时等待。
+            // 2. 如保留下面“已有任务就恢复”的行为，需与 Resume 使用相同的状态重置规则。
             lock (_syncRoot)
             {
                 if (_runTask != null && !_runTask.IsCompleted)
@@ -68,6 +74,9 @@ namespace AndonVoiceBroadcaster.Services
 
         public void Pause()
         {
+            // 每小时重试导写 3：将这里明确为“用户手动暂停”。
+            // 1. 标记手动暂停并撤销自动重试计划，保留下面取消语音和提示音的操作。
+            // 2. 即使后台恢复请求正在返回，也不能覆盖手动暂停，更不能自动开始播放。
             _paused = true;
             _speechService.Cancel();
             _soundService.Stop();
@@ -77,6 +86,9 @@ namespace AndonVoiceBroadcaster.Services
 
         public void Resume()
         {
+            // 每小时重试导写 4：点击继续时立即尝试，不必等满一小时。
+            // 1. 清除手动暂停、故障等待和下次重试时间，再清零失败次数，让主循环重新请求 MES。
+            // 2. 这里的“继续”只是开始尝试；是否连接恢复，应等真正查询 MES 成功后再记录。
             _consecutiveFailureCount = 0;
             _paused = false;
             RaiseStatus("运行中");
@@ -144,6 +156,11 @@ namespace AndonVoiceBroadcaster.Services
                 int retryDelaySeconds = 0;
                 try
                 {
+                    // 每小时重试导写 5：把下面“只要暂停就跳过”的判断拆成按暂停原因处理。
+                    // 1. 手动暂停始终等待；故障等待未到期也只短暂等待，不发起 MES 请求。
+                    // 2. 故障等待到期且处于工作时段时，允许进行一次恢复尝试；此时先不要清零失败计数。
+                    // 3. 保留故障等待标记直到查询成功，失败时才能直接再等一小时，而非重新短间隔连试三次。
+                    // 4. 非工作时间沿用下方工作时段限制，到上班且重试已到期时再尝试；不要提前恢复播报。
                     if (_paused)
                     {
                         await Task.Delay(500, cancellationToken);
@@ -165,6 +182,11 @@ namespace AndonVoiceBroadcaster.Services
 
                     await EnsureLoggedInAsync(cancellationToken);
                     List<VoiceBroadcastTask> tasks = await _apiClient.GetPendingTasksAsync(_resolvedWorkshopIds, cancellationToken);
+                    // 每小时重试导写 6：在这里确认“恢复成功”，空任务列表也算接口正常。
+                    // 1. 使用上面真实的登录、任务查询结果判断恢复，不新增 ping 探测；Token 失效沿用重登流程。
+                    // 2. 查询成功后清除故障等待、下次重试时间和失败次数，并更新状态与恢复日志。
+                    // 3. 更新前再次核对暂停原因：期间若用户手动暂停，则继续保持暂停，禁止进入实际播放。
+                    // 4. EnsureLoggedInAsync 内也会报告“运行中”，需与此处协调，避免尚未查询成功就显示已恢复。
                     _consecutiveFailureCount = 0;
                     // 时间格式固定为 yyyy-MM-dd HH:mm:ss，可按字符串实现 FIFO。
                     tasks = tasks.Where(x => x != null && x.IsPending)
@@ -202,6 +224,9 @@ namespace AndonVoiceBroadcaster.Services
 
                 if (retryDelaySeconds > 0)
                 {
+                    // 每小时重试导写 8：这里仅保留原来的短间隔重试；一小时等待由第 5 步检查到期时间。
+                    // 1. 不在这里直接 Task.Delay 一小时，否则点击继续后仍可能要等到延时结束才发请求。
+                    // 2. 维持取消令牌处理，确保等待期间退出或重载设置仍可及时结束后台任务。
                     await Task.Delay(TimeSpan.FromSeconds(retryDelaySeconds), cancellationToken);
                 }
             }
@@ -210,6 +235,12 @@ namespace AndonVoiceBroadcaster.Services
 
         private int RegisterFailure(string summary, Exception exception)
         {
+            // 每小时重试导写 7：在此安排故障等待，并区分首次达到上限与每小时恢复再次失败。
+            // 1. 首次连续失败达到 MaxRequestRetryCount（默认 3）后，标记故障等待，安排从此刻起一小时后重试。
+            // 2. 已处于故障等待的恢复尝试若失败，直接将下次时间推迟一小时，不重启三次短间隔重试。
+            // 3. 安排好时间后返回 0，由主循环管理等待；更新下方状态和日志，显示实际错误与下次重试时间。
+            // 4. 若用户已手动暂停，失败回调只记录错误，不得把它改为可自动恢复的故障等待。
+            // 5. 改完验证：三次失败、每小时单次失败后重排、成功恢复、空列表成功、手动暂停与继续、工作时段与退出。
             _consecutiveFailureCount++;
             int maximum = Math.Max(1, _settings.MaxRequestRetryCount);
             _logger.Error(summary + "，连续失败 " + _consecutiveFailureCount + "/" + maximum + "。", exception);
@@ -343,6 +374,9 @@ namespace AndonVoiceBroadcaster.Services
 
         private async Task EnsureLoggedInAsync(CancellationToken cancellationToken)
         {
+            // 每小时重试导写 6（配套）：登录成功与连接完全恢复是两件事。
+            // 1. 保留登录、车间解析职责；故障恢复期间不要在任务查询之前提前将界面改为“运行中”。
+            // 2. 最终恢复状态与日志统一由主循环在任务查询成功后处理，且必须尊重期间的手动暂停。
             if (_apiClient.HasToken && _workshopsResolved)
             {
                 return;
