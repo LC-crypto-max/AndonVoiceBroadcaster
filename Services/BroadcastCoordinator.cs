@@ -29,13 +29,14 @@ namespace AndonVoiceBroadcaster.Services
             Manual,     // 用户手动暂停
             Fault       // 网络故障等待
         };
-        private volatile bool _paused;
-        private PauseReason _pauseReason = PauseReason.None;
+        //private volatile bool _paused;
+        private volatile PauseReason _pauseReason = PauseReason.None;
         // 下次允许重试的时间
         private DateTimeOffset? _nextRetryTime;
-
         // 设定每小时重试一次
         private static readonly TimeSpan FaultRetryInterval = TimeSpan.FromHours(1);
+        private Timer _retryTimer;
+        private bool _retryDue;
         private bool _workshopsResolved;
         private int _consecutiveFailureCount;
         private List<long> _resolvedWorkshopIds = new List<long>();
@@ -62,7 +63,10 @@ namespace AndonVoiceBroadcaster.Services
 
         public bool IsPaused
         {
-            get { return _paused; }
+            get
+            {
+                return _pauseReason != PauseReason.None;
+            }
         }
 
         public void Start()
@@ -72,16 +76,16 @@ namespace AndonVoiceBroadcaster.Services
             // 2. 如保留下面“已有任务就恢复”的行为，需与 Resume 使用相同的状态重置规则。
             lock (_syncRoot)
             {
-                if (_runTask != null && !_runTask.IsCompleted)
-                {
+                    if (_runTask != null && !_runTask.IsCompleted)
+                    {
+                        _pausedReason = PauseReason.None;
+                        RaiseStatus("运行中");
+                        return;
+                    }
                     _paused = false;
-                    RaiseStatus("运行中");
-                    return;
+                    _cancellationTokenSource = new CancellationTokenSource();
+                    _runTask = Task.Run(() => RunLoopAsync(_cancellationTokenSource.Token));
                 }
-                _paused = false;
-                _cancellationTokenSource = new CancellationTokenSource();
-                _runTask = Task.Run(() => RunLoopAsync(_cancellationTokenSource.Token));
-            }
         }
 
         public void Pause()
@@ -261,6 +265,8 @@ namespace AndonVoiceBroadcaster.Services
             {
                 // 达到失败上限后等待人工恢复，避免持续请求异常服务。
                 _paused = true;
+                // 修改错误原因为故障
+                _pauseReason = PauseReason.Fault;
                 RaiseStatus("连续失败已达上限，已暂停；请检查后点击继续播报");
                 _logger.Warn("已达到最大重试次数，停止自动请求 MES。修复配置或服务后，请点击“继续播报”。");
                 return 0;
