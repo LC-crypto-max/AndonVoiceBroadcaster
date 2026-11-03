@@ -35,7 +35,9 @@ namespace AndonVoiceBroadcaster.Services
         private DateTimeOffset? _nextRetryTime;
         // 设定每小时重试一次
         private static readonly TimeSpan FaultRetryInterval = TimeSpan.FromHours(1);
+        //引入重试timer
         private Timer _retryTimer;
+        //是否到重试期
         private bool _retryDue;
         private bool _workshopsResolved;
         private int _consecutiveFailureCount;
@@ -55,6 +57,23 @@ namespace AndonVoiceBroadcaster.Services
             _speechService = speechService;
             _soundService = soundService;
             _logger = logger;
+            //Timer四参数构造方法,利用lambda表达式等待条件进行初始化
+            _retryTimer = new Timer(state =>
+            {
+                lock (_syncRoot)
+                {
+                    //此时取故障等待且目前时间大于重试时间
+                    if (_pauseReason == PauseReason.Fault && _nextRetryTime.HasValue && DateTimeOffset.Now >= _nextRetryTime.Value)
+                    {
+                        _retryDue = true;
+                    }
+                }
+            }, null,
+            //不设置倒计时
+            Timeout.Infinite,
+            //不设置重复
+            // 旧结尾：Timeout.Infinite)；分号应结束 Timer 的赋值语句。
+            Timeout.Infinite);
         }
 
         public event Action<string> StatusChanged;
@@ -76,16 +95,32 @@ namespace AndonVoiceBroadcaster.Services
             // 2. 如保留下面“已有任务就恢复”的行为，需与 Resume 使用相同的状态重置规则。
             lock (_syncRoot)
             {
-                    if (_runTask != null && !_runTask.IsCompleted)
-                    {
-                        _pausedReason = PauseReason.None;
-                        RaiseStatus("运行中");
-                        return;
-                    }
-                    _paused = false;
-                    _cancellationTokenSource = new CancellationTokenSource();
-                    _runTask = Task.Run(() => RunLoopAsync(_cancellationTokenSource.Token));
+                //启动或者继续已有任务
+                _retryTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+                _pauseReason = PauseReason.None;
+                _nextRetryTime = null;
+
+                _retryDue = false;
+                _consecutiveFailureCount = 0;
+                //_cancellationTokenSource = new CancellationTokenSource();
+                //_runTask = Task.Run(() => RunLoopAsync(_cancellationTokenSource.Token));
+
+                //此处修改已有后台循环任务逻辑
+                if (_runTask != null && !_runTask.IsCompleted)
+                {
+                    //_pauseReason = PauseReason.None;
+                    //RaiseStatus("运行中");
+                    return;
                 }
+                //循环结束，此处释放上次的Token
+                _cancellationTokenSource?.Dispose();
+
+                var cancellation = new CancellationTokenSource();
+                _cancellationTokenSource = cancellation;
+                //通过定义好的runloop方法捕获本次令牌源
+                // _runTask = Task.Run(() => RunLoopAsync(_cancellationTokenSource.Token));
+                _runTask = Task.Run(() => RunLoopAsync(cancellation.Token));
+            }
         }
 
         public void Pause()
@@ -93,7 +128,15 @@ namespace AndonVoiceBroadcaster.Services
             // 每小时重试导写 3：将这里明确为“用户手动暂停”。
             // 1. 标记手动暂停并撤销自动重试计划，保留下面取消语音和提示音的操作。
             // 2. 即使后台恢复请求正在返回，也不能覆盖手动暂停，更不能自动开始播放。
-            _paused = true;
+            lock (_syncRoot)
+            {
+                // _paused = true;
+                _pauseReason = PauseReason.Manual;
+                // _retryTimer（原语句未写完）；手动暂停时撤销定时等待。
+                _retryTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                _nextRetryTime = null;
+                _retryDue = false;
+            }
             _speechService.Cancel();
             _soundService.Stop();
             RaiseStatus("已暂停");
@@ -105,10 +148,19 @@ namespace AndonVoiceBroadcaster.Services
             // 每小时重试导写 4：点击继续时立即尝试，不必等满一小时。
             // 1. 清除手动暂停、故障等待和下次重试时间，再清零失败次数，让主循环重新请求 MES。
             // 2. 这里的“继续”只是开始尝试；是否连接恢复，应等真正查询 MES 成功后再记录。
-            _consecutiveFailureCount = 0;
-            _paused = false;
-            RaiseStatus("运行中");
-            _logger.Info("播报已恢复，连续失败计数已清零。");
+            lock (_syncRoot)
+            {
+                _retryTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                _consecutiveFailureCount = 0;
+                // _paused = false;
+                _pauseReason = PauseReason.None;
+                _nextRetryTime = null;
+                _retryDue = false;
+            }
+            // RaiseStatus("运行中");
+            // _logger.Info("播报已恢复，连续失败计数已清零。");
+            RaiseStatus("等待尝试连接 MES");
+            _logger.Info("已取消暂停和故障等待，连续失败计数已清零，等待尝试连接 MES。");
         }
 
         public async Task StopAsync()
@@ -117,6 +169,9 @@ namespace AndonVoiceBroadcaster.Services
             CancellationTokenSource cancellation;
             lock (_syncRoot)
             {
+                _retryTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                _nextRetryTime = null;
+                _retryDue = false;
                 cancellation = _cancellationTokenSource;
                 task = _runTask;
             }
@@ -177,12 +232,24 @@ namespace AndonVoiceBroadcaster.Services
                     // 2. 故障等待到期且处于工作时段时，允许进行一次恢复尝试；此时先不要清零失败计数。
                     // 3. 保留故障等待标记直到查询成功，失败时才能直接再等一小时，而非重新短间隔连试三次。
                     // 4. 非工作时间沿用下方工作时段限制，到上班且重试已到期时再尝试；不要提前恢复播报。
-                    if (_paused)
+                    // if (_paused)
+                    //判定是否为手动暂停
+                    //if (IsPaused)
+                    //{
+                    //    await Task.Delay(500, cancellationToken);
+                    //    continue;
+                    //}
+                    bool canwait;
+                    //判断是否为手动暂停或者故障暂停但是未进入重试
+                    lock (_syncRoot)
+                    {
+                        canwait = _pauseReason == PauseReason.Manual || (_pauseReason == PauseReason.Fault && !_retryDue);
+                    }
+                    if (canwait)
                     {
                         await Task.Delay(500, cancellationToken);
                         continue;
                     }
-
                     DateTime now = DateTime.Now;
                     if (!_settings.IsWithinWorkHours(now))
                     {
@@ -203,7 +270,25 @@ namespace AndonVoiceBroadcaster.Services
                     // 2. 查询成功后清除故障等待、下次重试时间和失败次数，并更新状态与恢复日志。
                     // 3. 更新前再次核对暂停原因：期间若用户手动暂停，则继续保持暂停，禁止进入实际播放。
                     // 4. EnsureLoggedInAsync 内也会报告“运行中”，需与此处协调，避免尚未查询成功就显示已恢复。
-                    _consecutiveFailureCount = 0;
+                    // _consecutiveFailureCount = 0;
+                    lock (_syncRoot)
+                    {
+                        // 请求返回期间若用户暂停，保留暂停状态并跳过播放。
+                        if (_pauseReason == PauseReason.Manual)
+                        {
+                            continue;
+                        }
+                        _consecutiveFailureCount = 0;
+
+                        //此处应该解除等待状态,否则循环会停止
+                        _pauseReason = PauseReason.None;
+                        _nextRetryTime = null;
+                        _retryDue = false;
+
+                        //取消重试计时器
+                        _retryTimer.Change(Timeout.InfiniteTimeSpan,Timeout.InfiniteTimeSpan);
+                    }
+                    RaiseStatus("运行中");
                     // 时间格式固定为 yyyy-MM-dd HH:mm:ss，可按字符串实现 FIFO。
                     tasks = tasks.Where(x => x != null && x.IsPending)
                         .OrderBy(x => string.IsNullOrWhiteSpace(x.CreateTime) ? "9999-12-31 23:59:59" : x.CreateTime)
@@ -214,7 +299,8 @@ namespace AndonVoiceBroadcaster.Services
 
                     foreach (VoiceBroadcastTask task in tasks)
                     {
-                        if (cancellationToken.IsCancellationRequested || _paused || !_settings.IsWithinWorkHours(DateTime.Now))
+                        // if (cancellationToken.IsCancellationRequested || _paused || !_settings.IsWithinWorkHours(DateTime.Now))
+                        if (cancellationToken.IsCancellationRequested || IsPaused || !_settings.IsWithinWorkHours(DateTime.Now))
                         {
                             break;
                         }
@@ -257,22 +343,49 @@ namespace AndonVoiceBroadcaster.Services
             // 3. 安排好时间后返回 0，由主循环管理等待；更新下方状态和日志，显示实际错误与下次重试时间。
             // 4. 若用户已手动暂停，失败回调只记录错误，不得把它改为可自动恢复的故障等待。
             // 5. 改完验证：三次失败、每小时单次失败后重排、成功恢复、空列表成功、手动暂停与继续、工作时段与退出。
-            _consecutiveFailureCount++;
+            bool faultPaused;
             int maximum = Math.Max(1, _settings.MaxRequestRetryCount);
-            _logger.Error(summary + "，连续失败 " + _consecutiveFailureCount + "/" + maximum + "。", exception);
+            int failureCount;
+            // _consecutiveFailureCount++;
+            lock (_syncRoot)
+            {
+                // 手动暂停后返回的失败，不能把暂停原因改成故障等待。
+                if (_pauseReason == PauseReason.Manual)
+                {
+                    _logger.Error(summary + "，当前为手动暂停，保持暂停状态。", exception);
+                    return 0;
+                }
+                failureCount = ++_consecutiveFailureCount;
+                //faultPaused = failureCount >= maximum;
+                //新增通过PausedReason加上次数判断
+                faultPaused = _pauseReason == PauseReason.Fault || failureCount >= maximum;
+                if (faultPaused)
+                {
+                    // _paused = true;
+                    // 修改错误原因为故障
+                    _pauseReason = PauseReason.Fault;
+                    //设置下次重试时间
+                    _nextRetryTime = DateTimeOffset.Now.Add(FaultRetryInterval);
+                    _retryDue = false;
+                    //改变timer状态，一小时一次
+                    _retryTimer.Change(FaultRetryInterval, Timeout.InfiniteTimeSpan);
+                }
+            }
+            _logger.Error(summary + "，连续失败 " + failureCount + "/" + maximum + "。", exception);
 
-            if (_consecutiveFailureCount >= maximum)
+            // if (_consecutiveFailureCount >= maximum)
+            if (faultPaused)
             {
                 // 达到失败上限后等待人工恢复，避免持续请求异常服务。
-                _paused = true;
-                // 修改错误原因为故障
-                _pauseReason = PauseReason.Fault;
+                // _paused = true;
+                // _pauseReason = PauseReason.Fault; // 已在上方锁内统一更新。
                 RaiseStatus("连续失败已达上限，已暂停；请检查后点击继续播报");
                 _logger.Warn("已达到最大重试次数，停止自动请求 MES。修复配置或服务后，请点击“继续播报”。");
                 return 0;
             }
 
-            RaiseStatus(summary + "，等待第 " + (_consecutiveFailureCount + 1) + " 次尝试");
+            // RaiseStatus(summary + "，等待第 " + (_consecutiveFailureCount + 1) + " 次尝试");
+            RaiseStatus(summary + "，等待第 " + (failureCount + 1) + " 次尝试");
             return _settings.NetworkRetrySeconds;
         }
 
@@ -284,7 +397,8 @@ namespace AndonVoiceBroadcaster.Services
                 return;
             }
 
-            while (task.IsPending && !_paused)
+            // while (task.IsPending && !_paused)
+            while (task.IsPending && !IsPaused)
             {
                 if (cancellationToken.IsCancellationRequested || !_settings.IsWithinWorkHours(DateTime.Now))
                 {
@@ -301,7 +415,8 @@ namespace AndonVoiceBroadcaster.Services
                     if (_soundService.Exists)
                     {
                         bool soundCompleted = await _soundService.PlayAsync(cancellationToken);
-                        if (!soundCompleted || _paused || cancellationToken.IsCancellationRequested)
+                        // if (!soundCompleted || _paused || cancellationToken.IsCancellationRequested)
+                        if (!soundCompleted || IsPaused || cancellationToken.IsCancellationRequested)
                         {
                             _logger.Info("任务 " + task.Id + " 在提示音阶段被取消，未确认次数。");
                             return;
@@ -313,7 +428,8 @@ namespace AndonVoiceBroadcaster.Services
                     }
 
                     bool speechCompleted = await _speechService.SpeakAsync(task.Content, _settings.TtsRate, _settings.TtsVolume, cancellationToken);
-                    if (!speechCompleted || _paused || cancellationToken.IsCancellationRequested)
+                    // if (!speechCompleted || _paused || cancellationToken.IsCancellationRequested)
+                    if (!speechCompleted || IsPaused || cancellationToken.IsCancellationRequested)
                     {
                         _logger.Info("任务 " + task.Id + " 在语音阶段被取消，未确认次数。");
                         return;
@@ -408,7 +524,7 @@ namespace AndonVoiceBroadcaster.Services
                 await _apiClient.LoginAsync(_credentials, cancellationToken);
             }
             await ResolveWorkshopsAsync(cancellationToken);
-            RaiseStatus("运行中");
+            // RaiseStatus("运行中"); // 登录成功后仍需等待实际任务查询成功。
             _logger.Info("MES 登录成功。");
         }
 
@@ -503,6 +619,12 @@ namespace AndonVoiceBroadcaster.Services
 
         public void Dispose()
         {
+            lock (_syncRoot)
+            {
+                _nextRetryTime = null;
+                _retryDue = false;
+                _retryTimer.Dispose();
+            }
             if (_cancellationTokenSource != null)
             {
                 _cancellationTokenSource.Cancel();
